@@ -10,6 +10,15 @@
 # Prefer a feed where one exists: it is one request, it is a stable format, and
 # it is the publisher telling you what is new rather than you guessing from HTML
 # that changes on redesign.
+#
+# Every source below was checked live: the feed returns items, and robots.txt
+# permits crawling. Two that look obvious and are not:
+#
+#   * r/FantasyPL has a working .rss feed, but reddit.com/robots.txt is
+#     "User-agent: * / Disallow: /". The fetcher honours that and would skip
+#     every request, so the source is omitted rather than left in to fail
+#     quietly.
+#   * fantasyyirma.com serves a feed whose newest item is from 2022. Dead site.
 
 sources:
   - name: fantasy-football-scout
@@ -53,3 +62,73 @@ sources:
     # Check FFS's terms before enabling: automated access to members-only
     # content may not be permitted even for members.
     cookie_env: FFS_COOKIE
+
+  # ---------------------------------------------------------------------------
+  # Free, FPL-specific. No paywall, so articles store as `access: full`.
+  - name: all-about-fpl
+    enabled: true
+    base_url: https://allaboutfpl.com
+    discovery:
+      feeds:
+        - https://allaboutfpl.com/feed
+      include_patterns:
+        - '/20\d{2}/\d{2}/'
+      exclude_patterns:
+        - '/tag/'
+        - '/category/'
+      max_articles_per_run: 6
+    tags: [tips]
+    trust: medium
+    ttl_days: 21
+    request_delay_seconds: 2.0
+
+  # ---------------------------------------------------------------------------
+  # YouTube channels. Discovery uses the per-channel upload feed; the content is
+  # the video's caption track, read with youtube-transcript-api.
+  #
+  # ignore_robots is required and not a formality: YouTube's robots.txt
+  # disallows both /feeds/videos.xml (this feed) and /api/ (the caption
+  # endpoint). Leave it false and the source finds nothing. It is per-source and
+  # off everywhere else, so the exception stays visible.
+  #
+  # `channel` takes an @handle, a /channel/UC... URL, or a bare UC... id. A
+  # handle is resolved once per run from the channel page, which is not itself
+  # disallowed.
+  - name: lets-talk-fpl
+    enabled: true
+    kind: youtube
+    channel: "@LetsTalkFPL"   # resolves to UCxeOc7eFxq37yW_Nc-69deA
+    ignore_robots: true
+    discovery:
+      # Titles are matched here, not URLs -- a watch URL is an opaque id, so the
+      # title is the only signal for skipping shorts and streams.
+      exclude_patterns:
+        - '(?i)#shorts'
+        - '(?i)\blive\b'
+      max_articles_per_run: 2
+    # The feed carries no duration, so length is judged from the transcript: a
+    # short comes in under a couple of thousand characters, a multi-hour stream
+    # far over the ceiling. A half-hour video is around 28,000.
+    min_transcript_chars: 1500
+    max_transcript_chars: 80000
+    tags: [video, tips]
+    trust: medium
+    ttl_days: 14
+    request_delay_seconds: 2.0
+
+  - name: fpl-harry
+    enabled: true
+    kind: youtube
+    channel: "@FPLHarry"      # resolves to UCcPWnCj5AKC19HaySZjb25g
+    ignore_robots: true
+    discovery:
+      exclude_patterns:
+        - '(?i)#shorts'
+        - '(?i)\blive\b'
+      max_articles_per_run: 2
+    min_transcript_chars: 1500
+    max_transcript_chars: 80000
+    tags: [video, tips]
+    trust: medium
+    ttl_days: 14
+    request_delay_seconds: 2.0

@@ -278,6 +278,30 @@ def test_a_full_feed_skips_the_root_crawl_entirely(settings, fetcher, allow_robo
     assert not root.called
 
 
+def test_tracking_parameters_are_stripped_but_real_ones_kept(settings, fetcher, allow_robots):
+    """The BBC's feed appends ?at_medium=RSS. Left in, the same article looks new
+    the day a publisher changes its analytics."""
+    allow_robots.get(f"{HOST}/feed").respond(
+        200,
+        text=feed_xml(
+            [
+                (
+                    "Tracked",
+                    # &amp; is how a feed actually escapes this. Parsed without
+                    # unescaping, the second parameter is named "amp;at_campaign"
+                    # and slips past the tracking filter.
+                    f"{HOST}/2026/07/25/one?at_medium=RSS&amp;at_campaign=rss&amp;utm_source=x",
+                    "Sat, 25 Jul 2026 08:00:00 +0000",
+                ),
+                ("Real query", f"{HOST}/2026/07/24/two?p=1234", "Fri, 24 Jul 2026 08:00:00 +0000"),
+            ]
+        ),
+    )
+    urls = [c.url for c in discover(make_source(), fetcher)]
+    assert urls[0] == f"{HOST}/2026/07/25/one", "campaign parameters removed"
+    assert urls[1] == f"{HOST}/2026/07/24/two?p=1234", "genuine identifiers kept"
+
+
 def test_a_dead_feed_does_not_raise(settings, fetcher, allow_robots):
     allow_robots.get(f"{HOST}/feed").respond(500, text="boom")
     assert discover(make_source(), fetcher) == []
@@ -678,7 +702,58 @@ def test_harvest_marks_a_paywalled_article_partial(
     report = harvest(settings, bootstrap=context.bootstrap, model=_FakeSummariser(), store=store)
 
     assert report.partial == 1
-    assert store.all()[0].access == "partial"
+    saved = store.all()[0]
+    assert saved.access == "partial"
+    assert saved.partial_reason == "paywalled"
+
+
+def test_a_long_article_we_truncated_is_not_called_paywalled(
+    settings, sources_file, allow_robots, context, tmp_path
+):
+    """A free article longer than the input budget is incomplete for our own
+    reasons. Telling the agent it was gated is simply false -- and only one of
+    the two is fixable with a subscription."""
+    from fpl_buddy.knowledge.harvest import harvest
+    from fpl_buddy.knowledge.summarize import MAX_INPUT_CHARS
+
+    settings.knowledge_sources_file = str(sources_file)
+    _serve_one_article(allow_robots, body="Words and words. " * (MAX_INPUT_CHARS // 8))
+    model = _FakeSummariser(
+        ArticleSummary(summary="Long piece.", truncated=True, player_names=[])
+    )
+    store = KnowledgeStore(tmp_path / "kb")
+
+    report = harvest(settings, bootstrap=context.bootstrap, model=model, store=store)
+
+    saved = store.all()[0]
+    assert saved.access == "partial"
+    assert "budget" in saved.partial_reason
+    assert "paywall" not in saved.partial_reason
+    assert report.partial == 0, "the paywall counter must not count our own truncation"
+    assert "paywalled" not in saved.index_line()
+
+
+def test_a_short_article_that_stops_dead_is_attributed_to_the_source(
+    settings, sources_file, allow_robots, context, tmp_path
+):
+    """A freemium site can strip its own "restricted to members" notice as
+    boilerplate, leaving text that just stops. Nothing marks it, and it is far
+    below our input budget -- so the source did the cutting, not us."""
+    from fpl_buddy.knowledge.harvest import harvest
+
+    settings.knowledge_sources_file = str(sources_file)
+    _serve_one_article(allow_robots, body="Short and abruptly ending. " * 25)
+    model = _FakeSummariser(
+        ArticleSummary(summary="Stops mid-section.", truncated=True, player_names=[])
+    )
+    store = KnowledgeStore(tmp_path / "kb")
+
+    report = harvest(settings, bootstrap=context.bootstrap, model=model, store=store)
+
+    saved = store.all()[0]
+    assert saved.access == "partial"
+    assert "source" in saved.partial_reason
+    assert report.partial == 1, "attributed to the publisher, so it counts as paywalled"
 
 
 def test_the_article_text_reaches_the_summariser_labelled_untrusted(
@@ -753,3 +828,467 @@ def test_a_summariser_failure_costs_one_article_not_the_run(
     assert report.stored == 0
     assert report.failures, "the failure is reported rather than swallowed silently"
     assert store.all() == []
+
+
+# --------------------------------------------------------------------- backends
+#
+# The real SDKs are optional installs and absent in CI, so nothing here imports
+# them. Backends are driven through injected fakes, which is also the only way
+# to exercise credit exhaustion without spending credits.
+
+
+class _FakeFirecrawlDoc:
+    def __init__(self, markdown="", html="", title="", author="", published=""):
+        self.markdown = markdown
+        self.html = html
+        self.metadata = {"title": title, "author": author, "publishedTime": published}
+
+
+class _FakeFirecrawlClient:
+    def __init__(self, *, remaining=1000, doc=None, error=None):
+        self.remaining = remaining
+        self.doc = doc if doc is not None else _FakeFirecrawlDoc(html="<article>hi</article>")
+        self.error = error
+        self.scrapes: list[str] = []
+
+    def get_credit_usage(self):
+        return {"remaining_credits": self.remaining}
+
+    def scrape(self, url, **kwargs):
+        if self.error:
+            raise self.error
+        self.scrapes.append(url)
+        return self.doc
+
+
+def _firecrawl(settings, client):
+    """A FirecrawlBackend wired to a fake client, skipping the real import."""
+    from fpl_buddy.knowledge.backends import FirecrawlBackend
+
+    backend = FirecrawlBackend(settings)
+    backend._client = client
+    backend._credits_left = client.remaining
+    return backend
+
+
+def test_firecrawl_is_skipped_without_a_key(settings):
+    from fpl_buddy.knowledge.backends import FirecrawlBackend
+
+    assert not settings.firecrawl_api_key.get_secret_value()
+    assert FirecrawlBackend(settings).available() is False
+
+
+def test_firecrawl_returns_both_html_and_markdown(settings):
+    client = _FakeFirecrawlClient(
+        doc=_FakeFirecrawlDoc(markdown="# hi", html="<article>hi</article>", title="Hi")
+    )
+    content = _firecrawl(settings, client).fetch(f"{HOST}/a", make_source())
+
+    assert content is not None
+    assert content.backend == "firecrawl"
+    assert content.html == "<article>hi</article>"
+    assert content.markdown == "# hi"
+    assert content.title == "Hi", "metadata must survive -- it is an object, not a string"
+
+
+def test_firecrawl_stops_at_the_credit_reserve(settings):
+    """The free tier is finite; a harvest must not spend the last of it."""
+    settings.firecrawl_credit_reserve = 50
+    client = _FakeFirecrawlClient(remaining=51)
+    backend = _firecrawl(settings, client)
+
+    assert backend.fetch(f"{HOST}/a", make_source()) is not None
+    assert backend.fetch(f"{HOST}/b", make_source()) is None, "reserve reached"
+    assert len(client.scrapes) == 1
+
+
+def test_firecrawl_failure_falls_through_rather_than_raising(settings):
+    client = _FakeFirecrawlClient(error=RuntimeError("upstream is down"))
+    assert _firecrawl(settings, client).fetch(f"{HOST}/a", make_source()) is None
+
+
+def test_firecrawl_passes_a_configured_subscription_cookie(settings, monkeypatch):
+    """Authenticated access to content you pay for, not a paywall bypass."""
+    monkeypatch.setenv("TEST_COOKIE", "session=abc")
+    seen = {}
+
+    class _Recording(_FakeFirecrawlClient):
+        def scrape(self, url, **kwargs):
+            seen.update(kwargs)
+            return self.doc
+
+    _firecrawl(settings, _Recording()).fetch(
+        f"{HOST}/a", make_source(cookie_env="TEST_COOKIE")
+    )
+    assert seen["headers"]["Cookie"] == "session=abc"
+    assert "html" in seen["formats"] and "markdown" in seen["formats"]
+
+
+def test_an_empty_firecrawl_document_is_not_usable(settings):
+    client = _FakeFirecrawlClient(doc=_FakeFirecrawlDoc(markdown="  ", html=""))
+    assert _firecrawl(settings, client).fetch(f"{HOST}/a", make_source()) is None
+
+
+def test_scrapling_is_skipped_when_not_installed(settings, monkeypatch):
+    import builtins
+
+    from fpl_buddy.knowledge.backends import ScraplingBackend
+
+    real_import = builtins.__import__
+
+    def no_scrapling(name, *args, **kwargs):
+        if name.startswith("scrapling"):
+            raise ImportError("not installed")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_scrapling)
+    assert ScraplingBackend(settings).available() is False
+
+
+def test_scrapling_returns_html_and_rejects_non_200(settings):
+    from fpl_buddy.knowledge.backends import ScraplingBackend
+
+    class _Response:
+        def __init__(self, status, html):
+            self.status = status
+            self.html_content = html
+
+    class _Fetcher:
+        def __init__(self, response):
+            self.response = response
+
+        def get(self, url, **kwargs):
+            return self.response
+
+    ok = ScraplingBackend(settings)
+    ok._fetcher = _Fetcher(_Response(200, "<article>hello</article>"))
+    content = ok.fetch(f"{HOST}/a", make_source())
+    assert content is not None and content.backend == "scrapling"
+
+    blocked = ScraplingBackend(settings)
+    blocked._fetcher = _Fetcher(_Response(403, "denied"))
+    assert blocked.fetch(f"{HOST}/a", make_source()) is None
+
+
+def test_httpx_backend_is_always_available(settings, fetcher):
+    from fpl_buddy.knowledge.backends import HttpxBackend
+
+    assert HttpxBackend(fetcher).available() is True
+
+
+def test_the_chain_falls_through_to_the_next_backend(settings, fetcher):
+    from fpl_buddy.knowledge.backends import ArticleContent, Backend, fetch_article
+
+    class _Dead(Backend):
+        name = "dead"
+
+        def fetch(self, url, source):
+            return None
+
+    class _Works(Backend):
+        name = "works"
+
+        def fetch(self, url, source):
+            return ArticleContent(url=url, html="<article>x</article>", backend=self.name)
+
+    got = fetch_article(f"{HOST}/a", make_source(), [_Dead(), _Works()])
+    assert got is not None and got.backend == "works"
+
+
+def test_the_chain_returns_nothing_when_every_backend_fails(settings):
+    from fpl_buddy.knowledge.backends import Backend, fetch_article
+
+    class _Dead(Backend):
+        name = "dead"
+
+        def fetch(self, url, source):
+            return None
+
+    assert fetch_article(f"{HOST}/a", make_source(), [_Dead()]) is None
+
+
+def test_backend_order_comes_from_config(settings, fetcher):
+    from fpl_buddy.knowledge.backends import build_backends
+
+    settings.knowledge_fetch_backends = "httpx"
+    assert [b.name for b in build_backends(settings, fetcher)] == ["httpx"]
+
+
+def test_an_unknown_backend_name_is_ignored_not_fatal(settings, fetcher):
+    from fpl_buddy.knowledge.backends import build_backends
+
+    settings.knowledge_fetch_backends = "nonsense,httpx"
+    assert [b.name for b in build_backends(settings, fetcher)] == ["httpx"]
+
+
+def test_there_is_always_a_backend_even_if_config_names_none(settings, fetcher):
+    """Asserted by shape, not by exact list: whether scrapling is installed is a
+    property of the machine, and this must hold either way."""
+    from fpl_buddy.knowledge.backends import build_backends
+
+    settings.knowledge_fetch_backends = ""
+    names = [b.name for b in build_backends(settings, fetcher)]
+    assert names, "a harvest with no way to fetch anything is not a useful state"
+    assert names[-1] == "httpx", "the always-available backend stays last"
+
+
+# ------------------------------------------------- rendered-markdown handling
+
+
+def test_a_browser_interstitial_is_trimmed_off_rendered_markdown():
+    """A rendering backend sees consent walls and extension blocks that a plain
+    HTTP client never does, and they arrive ahead of the article."""
+    from fpl_buddy.knowledge.extract import from_markdown
+
+    markdown = (
+        "edigitalsurvey.com\n\n# edigitalsurvey.com is blocked\n\n"
+        "This page has been blocked by an extension\n\nERR_BLOCKED_BY_CLIENT\n\n"
+        "Reload\n\n" + "Newcastle beat Arsenal to the signing. " * 30
+    )
+    article = from_markdown(markdown, f"{HOST}/a", title="Real headline")
+
+    assert article is not None
+    assert "ERR_BLOCKED" not in article.text
+    assert "blocked by an extension" not in article.text
+    assert article.text.startswith("Newcastle beat Arsenal")
+
+
+def test_markdown_syntax_is_reduced_to_prose():
+    from fpl_buddy.knowledge.extract import from_markdown
+
+    markdown = (
+        "## Heading\n\n[Read more](https://example.test/x) and **bold** text. "
+        "![img](https://example.test/i.png)\n\n" + "Body sentence here. " * 30
+    )
+    article = from_markdown(markdown, f"{HOST}/a")
+
+    assert article is not None
+    assert "https://example.test" not in article.text, "link targets are noise"
+    assert "Read more" in article.text, "but their labels are content"
+    assert "**" not in article.text and "##" not in article.text
+
+
+def test_a_paywall_marker_in_rendered_markdown_is_still_caught():
+    from fpl_buddy.knowledge.extract import from_markdown
+
+    markdown = "Intro paragraph. " * 40 + "\n\nThis content is restricted to members."
+    article = from_markdown(markdown, f"{HOST}/a")
+    assert article is not None and article.access == "partial"
+
+
+# ----------------------------------------------------------------------- youtube
+#
+# youtube-transcript-api is an optional install and absent in CI, so the
+# transcript path is driven through injected fakes.
+
+
+YT_FEED = """<?xml version="1.0"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015">
+  <entry><yt:videoId>aaaaaaaaaaa</yt:videoId><title>Best FPL picks for GW1</title>
+    <published>2026-07-25T10:00:00+00:00</published></entry>
+  <entry><yt:videoId>bbbbbbbbbbb</yt:videoId><title>Quick thought #shorts</title>
+    <published>2026-07-24T10:00:00+00:00</published></entry>
+  <entry><yt:videoId>ccccccccccc</yt:videoId><title>LIVE Q&amp;A stream</title>
+    <published>2026-07-23T10:00:00+00:00</published></entry>
+</feed>"""
+
+
+def youtube_source(**overrides) -> Source:
+    payload = {
+        "name": "channel",
+        "kind": "youtube",
+        "channel": "UCHcvyjfCHf5D1RmVc216qWA",
+        "ignore_robots": True,
+        "discovery": {"exclude_patterns": ["(?i)#shorts", r"(?i)\bLIVE\b"]},
+        "request_delay_seconds": 0,
+    }
+    payload.update(overrides)
+    return Source.model_validate(payload)
+
+
+def test_a_youtube_source_needs_a_channel():
+    with pytest.raises(ValueError, match="needs a channel"):
+        Source.model_validate({"name": "x", "kind": "youtube"})
+
+
+def test_a_channel_makes_no_sense_on_an_article_source():
+    with pytest.raises(ValueError, match="only applies to kind 'youtube'"):
+        Source.model_validate({"name": "x", "base_url": HOST, "channel": "@someone"})
+
+
+def test_a_youtube_source_without_the_robots_opt_out_is_warned_about(caplog):
+    """Both the feed and the caption endpoint are disallowed, so it would
+    silently find nothing."""
+    youtube_source(ignore_robots=False)
+    assert "robots.txt" in caplog.text
+
+
+def test_ignore_robots_is_per_source_and_off_by_default(settings):
+    with respx.mock(assert_all_called=False) as router:
+        router.get(url__regex=r".*/robots\.txt").respond(
+            200, text="User-agent: *\nDisallow: /feeds/"
+        )
+        page = router.get("https://www.youtube.com/feeds/videos.xml").respond(200, text="ok")
+        fetcher = Fetcher(settings)
+
+        blocked = fetcher.get("https://www.youtube.com/feeds/videos.xml", source=make_source())
+        assert not blocked.ok and not page.called, "default still honours robots"
+
+        allowed = fetcher.get(
+            "https://www.youtube.com/feeds/videos.xml", source=youtube_source()
+        )
+        assert allowed.ok and page.called
+
+
+def test_channel_ids_resolve_from_every_accepted_form():
+    from fpl_buddy.knowledge.youtube import resolve_channel_id
+
+    uc = "UCHcvyjfCHf5D1RmVc216qWA"
+    assert resolve_channel_id(uc, lambda url: "") == uc
+    assert resolve_channel_id(f"https://www.youtube.com/channel/{uc}", lambda url: "") == uc
+
+    fetched = []
+
+    def page(url):
+        fetched.append(url)
+        return f'<link rel="canonical" href="https://www.youtube.com/channel/{uc}">'
+
+    assert resolve_channel_id("@SomeChannel", page) == uc
+    assert fetched == ["https://www.youtube.com/@SomeChannel"]
+
+
+def test_the_channels_own_id_wins_over_any_other_on_the_page():
+    """The bug this pins: taking the first UC-looking id on a channel page
+    resolved @LetsTalkFPL to "Let's Talk Football", a different channel, and
+    every downstream step then looked perfectly healthy while harvesting
+    somebody else's uploads."""
+    from fpl_buddy.knowledge.youtube import resolve_channel_id
+
+    mine, someone_else = "UCxeOc7eFxq37yW_Nc-69deA", "UCHcvyjfCHf5D1RmVc216qWA"
+    page = (
+        f'{{"channelId":"{someone_else}","recommended":true}}'
+        f'<link rel="canonical" href="https://www.youtube.com/channel/{mine}">'
+        f'{{"externalId":"{mine}"}}'
+    )
+    assert resolve_channel_id("@Someone", lambda url: page) == mine
+
+
+def test_a_page_without_a_canonical_id_resolves_to_nothing():
+    """Guessing is what caused the bug above, so there is no fallback."""
+    from fpl_buddy.knowledge.youtube import resolve_channel_id
+
+    page = '{"channelId":"UCHcvyjfCHf5D1RmVc216qWA","recommended":true}'
+    assert resolve_channel_id("@Someone", lambda url: page) is None
+
+
+def test_an_unresolvable_channel_returns_nothing():
+    from fpl_buddy.knowledge.youtube import resolve_channel_id
+
+    assert resolve_channel_id("@Missing", lambda url: "") is None
+    assert resolve_channel_id("@Missing", lambda url: "<html>no ids here</html>") is None
+
+
+def test_video_ids_are_read_from_urls_and_bare_ids():
+    from fpl_buddy.knowledge.youtube import video_id_from_url
+
+    assert video_id_from_url("https://www.youtube.com/watch?v=aaaaaaaaaaa") == "aaaaaaaaaaa"
+    assert video_id_from_url("https://youtu.be/aaaaaaaaaaa") == "aaaaaaaaaaa"
+    assert video_id_from_url("aaaaaaaaaaa") == "aaaaaaaaaaa"
+    assert video_id_from_url("https://www.youtube.com/") is None
+
+
+def test_the_upload_feed_becomes_dated_candidates(settings, fetcher, allow_robots):
+    allow_robots.get(url__regex=r".*/feeds/videos\.xml.*").respond(200, text=YT_FEED)
+    found = discover(youtube_source(), fetcher)
+
+    assert [c.url for c in found] == ["https://www.youtube.com/watch?v=aaaaaaaaaaa"]
+    assert found[0].title == "Best FPL picks for GW1"
+    assert found[0].published.day == 25
+
+
+def test_youtube_patterns_filter_on_the_title_not_the_url(settings, fetcher, allow_robots):
+    """A watch URL is an opaque id, so the title is the only signal for
+    skipping shorts and streams."""
+    allow_robots.get(url__regex=r".*/feeds/videos\.xml.*").respond(200, text=YT_FEED)
+    urls = [c.url for c in discover(youtube_source(), fetcher)]
+
+    assert "https://www.youtube.com/watch?v=bbbbbbbbbbb" not in urls, "#shorts"
+    assert "https://www.youtube.com/watch?v=ccccccccccc" not in urls, "LIVE stream"
+
+
+def test_a_blocked_feed_explains_what_is_missing(settings, fetcher, caplog):
+    with respx.mock(assert_all_called=False) as router:
+        router.get(url__regex=r".*/robots\.txt").respond(200, text="User-agent: *\nDisallow: /")
+        assert discover(youtube_source(ignore_robots=False), fetcher) == []
+    assert "ignore_robots" in caplog.text
+
+
+def test_timestamps_are_marked_through_the_transcript():
+    from fpl_buddy.knowledge.youtube import _with_timestamps
+
+    class _Snippet:
+        def __init__(self, start, text):
+            self.start = start
+            self.text = text
+
+        duration = 3.0
+
+    text = _with_timestamps(
+        [_Snippet(0, "hello there"), _Snippet(30, "still talking"), _Snippet(75, "much later")]
+    )
+    assert "[0:00]" in text
+    assert "[1:15]" in text, "a marker roughly once a minute"
+    assert "[0:30]" not in text, "not one per segment"
+    assert "hello there" in text and "much later" in text
+
+
+def test_a_transcript_becomes_an_article_without_extraction():
+    from fpl_buddy.knowledge.extract import from_transcript
+    from fpl_buddy.knowledge.youtube import Transcript
+
+    transcript = Transcript(video_id="aaaaaaaaaaa", text="Some FPL talk. " * 50)
+    article = from_transcript(transcript, "Best picks", author="channel")
+
+    assert article is not None
+    assert article.url == "https://www.youtube.com/watch?v=aaaaaaaaaaa"
+    assert article.title == "Best picks"
+    assert article.access == "full", "a video is not paywalled the way an article is"
+    assert article.usable
+
+
+def test_a_video_note_declares_itself_a_videoobject(store):
+    """schema.org has a type for this, and the header is meant to be portable."""
+    note = ArticleNote(
+        id="channel-2026-07-25-aaaaaaaaaaa",
+        title="Best picks",
+        url="https://www.youtube.com/watch?v=aaaaaaaaaaa",
+        source="channel",
+        kind="youtube",
+        video_id="aaaaaaaaaaa",
+    )
+    text = store.save(note).read_text()
+    assert "schema_type: VideoObject" in text
+    assert "video_id: aaaaaaaaaaa" in text
+
+    loaded = store.get("channel-2026-07-25-aaaaaaaaaaa")
+    assert loaded.kind == "youtube"
+    assert loaded.video_id == "aaaaaaaaaaa"
+
+
+def test_an_article_note_is_still_an_article(store):
+    store.save(note())
+    assert "schema_type: Article" in store.path_for(note()).read_text()
+
+
+def test_a_video_id_is_used_as_the_filename_slug():
+    """Slugifying a watch URL gives "watch-v-aaaaaaaaaaa", which is nobody's
+    idea of a readable id."""
+    from datetime import UTC, datetime
+
+    made = make_id(
+        "channel",
+        "https://www.youtube.com/watch?v=aaaaaaaaaaa",
+        datetime(2026, 7, 25, tzinfo=UTC),
+        slug="aaaaaaaaaaa",
+    )
+    assert made == "channel-2026-07-25-aaaaaaaaaaa"

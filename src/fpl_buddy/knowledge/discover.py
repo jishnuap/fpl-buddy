@@ -20,12 +20,25 @@ from __future__ import annotations
 import logging
 import re
 from datetime import UTC, datetime
-from urllib.parse import urldefrag, urljoin, urlparse
+from html import unescape
+from urllib.parse import (
+    parse_qsl,
+    urldefrag,
+    urlencode,
+    urljoin,
+    urlparse,
+    urlunparse,
+)
 
 from .fetch import Fetcher
 from .sources import Source
 
 logger = logging.getLogger(__name__)
+
+# Campaign parameters that identify a referrer, not an article.
+_TRACKING_KEYS = frozenset(
+    {"fbclid", "gclid", "mc_cid", "mc_eid", "ref", "source", "campaign"}
+)
 
 _LINK_RE = re.compile(r'<a\b[^>]*?href=["\']([^"\'#]+)', re.I)
 _LOC_RE = re.compile(r"<loc>\s*([^<\s]+)\s*</loc>", re.I)
@@ -37,13 +50,21 @@ _PUBDATE_RE = re.compile(r"<(?:pubDate|updated|published)>\s*([^<]+?)\s*</", re.
 
 
 class Candidate:
-    """A URL worth considering, plus whatever date the source volunteered."""
+    """A URL worth considering, plus whatever the source volunteered about it.
 
-    __slots__ = ("url", "published")
+    ``title`` is usually empty -- a feed's title is not to be trusted over the
+    article's own -- but a YouTube video has no page to extract one from, so
+    there the feed is the only source of it.
+    """
 
-    def __init__(self, url: str, published: datetime | None = None) -> None:
+    __slots__ = ("url", "published", "title")
+
+    def __init__(
+        self, url: str, published: datetime | None = None, title: str = ""
+    ) -> None:
         self.url = url
         self.published = published
+        self.title = title
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"Candidate({self.url!r}, {self.published!r})"
@@ -51,6 +72,9 @@ class Candidate:
 
 def discover(source: Source, fetcher: Fetcher) -> list[Candidate]:
     """Candidate article URLs for one source, deduplicated and capped."""
+    if source.kind == "youtube":
+        return _from_youtube(source, fetcher)
+
     seen: dict[str, Candidate] = {}
 
     for url in source.discovery.feeds:
@@ -92,6 +116,59 @@ def discover(source: Source, fetcher: Fetcher) -> list[Candidate]:
 # --------------------------------------------------------------------------- #
 
 
+def _from_youtube(source: Source, fetcher: Fetcher) -> list[Candidate]:
+    """The channel's upload feed: fifteen newest videos, with ids and dates.
+
+    The feed is parsed directly rather than through the generic reader because
+    it carries ``<yt:videoId>``, which is the thing worth having -- guessing it
+    back out of a watch link would be strictly worse.
+    """
+    from .youtube import WATCH_URL, feed_url, resolve_channel_id
+
+    def _page(url: str) -> str:
+        response = fetcher.get(url, source=source)
+        return response.text if response.ok else ""
+
+    channel_id = resolve_channel_id(source.channel or "", _page)
+    if not channel_id:
+        logger.warning("%s: could not resolve channel %r.", source.name, source.channel)
+        return []
+
+    response = fetcher.get(feed_url(channel_id), source=source)
+    if not response.ok:
+        logger.info(
+            "%s: upload feed unavailable (status %s). YouTube disallows it in "
+            "robots.txt -- this source needs ignore_robots: true.",
+            source.name, response.status,
+        )
+        return []
+
+    out: list[Candidate] = []
+    for entry in re.findall(r"<entry>(.*?)</entry>", response.text, re.S):
+        video = re.search(r"<yt:videoId>([\w-]{11})</yt:videoId>", entry)
+        if not video:
+            continue
+        title = re.search(r"<title>(.*?)</title>", entry, re.S)
+        url = WATCH_URL.format(video_id=video.group(1))
+        # Patterns match on the title here, not the URL: a watch URL is an
+        # opaque id, so "#shorts" or "LIVE" is the only signal available.
+        haystack = unescape(title.group(1).strip()) if title else url
+        if not source.discovery.matches(haystack):
+            continue
+        stamp = re.search(r"<published>(.*?)</published>", entry, re.S)
+        out.append(
+            Candidate(
+                url,
+                _parse_date(stamp.group(1)) if stamp else None,
+                title=haystack if title else "",
+            )
+        )
+
+    out.sort(key=lambda c: c.published or datetime.min.replace(tzinfo=UTC), reverse=True)
+    logger.info("%s: upload feed yielded %d video(s).", source.name, len(out))
+    return out[: source.discovery.max_articles_per_run]
+
+
 def _acceptable(url: str, source: Source) -> bool:
     """On the source's own host, and matching its article patterns."""
     parsed = urlparse(url)
@@ -103,7 +180,33 @@ def _acceptable(url: str, source: Source) -> bool:
 
 
 def _clean(base: str, href: str) -> str:
-    return urldefrag(urljoin(base, href.strip()))[0].rstrip("/")
+    """Absolute, fragment-free, tracking-free URL -- the key we deduplicate on.
+
+    Feeds routinely append campaign parameters (the BBC's football feed adds
+    ``?at_medium=RSS&at_campaign=rss``). Left in place they make the same article
+    look new the day a publisher changes its analytics, so they are stripped
+    while genuine query parameters are kept -- plenty of sites still identify
+    posts with ``?p=123``.
+    """
+    # Unescape first. Feed XML escapes ampersands, so a raw link reads
+    # "?at_medium=RSS&amp;at_campaign=rss" -- parse that as-is and the second
+    # parameter is literally named "amp;at_campaign", which then slips past the
+    # tracking filter and lands in the stored URL.
+    absolute = urldefrag(urljoin(base, unescape(href.strip())))[0]
+    parsed = urlparse(absolute)
+    if parsed.query:
+        kept = [
+            (key, value)
+            for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+            if not _is_tracking(key)
+        ]
+        absolute = urlunparse(parsed._replace(query=urlencode(kept)))
+    return absolute.rstrip("/")
+
+
+def _is_tracking(key: str) -> bool:
+    lowered = key.casefold()
+    return lowered.startswith(("utm_", "at_")) or lowered in _TRACKING_KEYS
 
 
 def _from_feed(feed_url: str, source: Source, fetcher: Fetcher) -> list[Candidate]:

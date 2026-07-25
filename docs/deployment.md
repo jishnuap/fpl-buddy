@@ -211,6 +211,29 @@ is a stable format, and it is the publisher telling you what is new. Listing
 pages (`roots`) are the fallback and are crawled within a strict page budget —
 `max_depth: 0` means the roots themselves, which is almost always what you want.
 
+**Fetch backends.** Article pages are fetched by the first backend in
+`KNOWLEDGE_FETCH_BACKENDS` that can handle them; each is skipped when
+unavailable, so naming one you have not installed is harmless.
+
+| Backend | Install | What it adds |
+|---|---|---|
+| `firecrawl` | `pip install -e '.[firecrawl]'` + `FIRECRAWL_API_KEY` | Renders JavaScript, gets past bot protection. **Metered**: 1 credit per page, 1000/month free. |
+| `scrapling` | `pip install -e '.[scrapling]'` | Local, free, no browsers needed. Impersonates a browser's TLS fingerprint, which clears most `403`s. |
+| `httpx` | built in | Always available. The reason neither of the above is required. |
+
+Only *article pages* use these. Feeds, sitemaps, `robots.txt` and listing pages
+always go over plain HTTP — they need no rendering, and routing them through a
+metered service would spend roughly 150 credits a month achieving nothing.
+
+Budget: a 26-article daily harvest is ~780 credits/month against a 1000 free
+tier. `FIRECRAWL_CREDIT_RESERVE` (default 50) stops the harvester before it
+spends the last of them, after which it falls through to the next backend.
+Remaining credits are read from the API, not tallied locally.
+
+`SCRAPLING_STEALTH=true` swaps Scrapling's plain fetcher for its browser-based
+one, which needs `scrapling install` to download browsers first — several
+hundred MB, so it is off by default and not in the image.
+
 **Paywalls.** A freemium site returns `200` with the first part of the article
 and a signup pitch; the rest is never sent to a logged-out client, so no crawler
 and no headless browser can recover it. Those notes are stored with

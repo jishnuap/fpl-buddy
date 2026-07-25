@@ -110,14 +110,28 @@ cp sources.example.yaml sources.yaml     # edit; then set KNOWLEDGE_SOURCES_FILE
 ```
 
 Sources are entirely config-driven: feeds, sitemaps, or listing pages used as
-crawl roots, with URL patterns, caps and a per-source TTL. Notes land in
+crawl roots, with URL patterns, caps and a per-source TTL. A source can also be
+a **YouTube channel** (`kind: youtube`) -- discovery reads the channel's upload
+feed and the content is the video's caption track, summarised into the same
+notes as everything else. That needs `ignore_robots: true` per source, because
+YouTube disallows both the feed and the caption endpoint to crawlers; it is off
+everywhere by default so the exception stays visible. Notes land in
 `${STATE_DIR}/knowledge` as markdown with a YAML header whose fields follow
 schema.org `Article`, so the archive is readable in Obsidian or any static site
 generator and outlives this project.
 
-The brief gets a one-line **index** of recent articles; the agent loads detail on
-demand via `read_article`, `search_articles` and `articles_about(element_id)`.
-That keeps the token cost flat as the archive grows.
+The brief gets a one-line **index** of recent articles only
+(`KNOWLEDGE_INDEX_DAYS`, `KNOWLEDGE_INDEX_LIMIT`), so its token cost is fixed no
+matter how large the archive gets. The tools read the **whole archive**, past
+that window: `read_article(id)`, `search_articles(query)` and
+`articles_about(element_id)`. A set-piece change written three weeks ago still
+decides a captaincy call today, and it drops off the index long before it stops
+mattering. Notes past their source's `ttl_days` are pruned and unreachable
+either way.
+
+Reading the archive does not depend on `KNOWLEDGE_SOURCES_FILE`: that setting
+says whether the daily job should *collect* articles, which is a different
+question from whether there are any to read.
 
 > **Harvested text is untrusted.** It is fenced as data at the summariser, which
 > can only emit a fixed schema; element ids are resolved from
@@ -126,9 +140,22 @@ That keeps the token cost flat as the archive grows.
 > tipster can — but not issue instructions, and deterministic validation plus
 > your approval still sit underneath. See [decisions.md](docs/decisions.md).
 
+Article pages are fetched by the first available backend in
+`KNOWLEDGE_FETCH_BACKENDS`: **Firecrawl** (renders JavaScript, gets past bot
+protection; 1 credit/page, optional), **Scrapling** (local, free, browser TLS
+impersonation; optional), then **httpx** (always there). Only article pages use
+them — feeds and `robots.txt` stay on plain HTTP, which keeps a 26-article daily
+harvest to ~780 of Firecrawl's 1000 free monthly credits.
+
+Whichever backend fetches, the same extractor runs on the HTML, so all three
+produce identical text. That is deliberate: Firecrawl's own markdown returned
+36k characters of comment threads around a 1.9k article on one site.
+
 Paywalled sources yield only their free portion, marked `access: partial`. If you
 hold a subscription, `cookie_env` names an environment variable holding your own
-session cookie. There is no paywall circumvention here and there won't be.
+session cookie. There is no paywall circumvention here and there won't be —
+verified: Firecrawl does not recover gated sections either, because the server
+never sends them.
 
 ## Notifications
 

@@ -106,6 +106,42 @@ class Settings(BaseSettings):
         description="Most articles to list in the brief. Detail is loaded by tool.",
     )
 
+    transcript_input_chars: int = Field(
+        default=40_000,
+        ge=1000,
+        description=(
+            "Input budget for a video transcript, which runs far longer than an "
+            "article: a half-hour video is around 28,000 characters."
+        ),
+    )
+    knowledge_fetch_backends: str = Field(
+        default="firecrawl,scrapling,httpx",
+        description=(
+            "Ordered, comma-separated list of ways to fetch an article. Each is "
+            "skipped when unavailable, so this can name backends you have not "
+            "installed. httpx always works and should stay last."
+        ),
+    )
+    firecrawl_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        description="Enables the Firecrawl backend. Free tier is 1000 credits/month.",
+    )
+    firecrawl_credit_reserve: int = Field(
+        default=50,
+        ge=0,
+        description=(
+            "Stop using Firecrawl with this many credits left, so a harvest "
+            "cannot spend the last of the month's budget."
+        ),
+    )
+    scrapling_stealth: bool = Field(
+        default=False,
+        description=(
+            "Use Scrapling's browser-based StealthyFetcher instead of its plain "
+            "one. Needs `scrapling install` to download browsers first."
+        ),
+    )
+
     @property
     def has_knowledge(self) -> bool:
         return bool(self.knowledge_sources_file)

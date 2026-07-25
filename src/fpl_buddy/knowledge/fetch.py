@@ -110,7 +110,10 @@ class Fetcher:
         etag: str | None = None,
         last_modified: str | None = None,
     ) -> Fetched:
-        if not self.allowed(url):
+        # A source may opt out of the robots check, and only per source. It is
+        # off by default and has to be written down in config, so the exception
+        # is visible rather than a property this code quietly stopped having.
+        if not (source is not None and source.ignore_robots) and not self.allowed(url):
             logger.info("robots.txt disallows %s; skipping.", url)
             return Fetched(url=url, status=999)
 

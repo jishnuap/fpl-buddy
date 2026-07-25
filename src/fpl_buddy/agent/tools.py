@@ -19,6 +19,7 @@ from ..data.context import DecisionContext
 from ..data.solio import LEADERBOARD_KEYS
 from ..fpl.client import FPLClient
 from ..fpl.models import MAX_PER_CLUB
+from ..knowledge.store import KnowledgeStore
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +30,19 @@ MAX_ROWS = 25
 _NOTES_PLACEHOLDER = "check back for additional notes"
 
 
-def build_tools(context: DecisionContext, client: FPLClient) -> list[BaseTool]:
-    """Bind the read-only toolset to one gameweek's context."""
+def build_tools(
+    context: DecisionContext,
+    client: FPLClient,
+    knowledge: KnowledgeStore | None = None,
+) -> list[BaseTool]:
+    """Bind the read-only toolset to one gameweek's context.
+
+    ``knowledge`` is the article archive. It is separate from
+    ``context.articles`` on purpose: the brief carries only a recent window of
+    articles to keep its token cost fixed, while the tools below can reach the
+    whole archive. Without it they fall back to the window, so a run with no
+    harvest configured behaves exactly as before.
+    """
     bootstrap = context.bootstrap
 
     # Fetched at most once per agent run, and only if a tool actually asks.
@@ -404,12 +416,47 @@ def build_tools(context: DecisionContext, client: FPLClient) -> list[BaseTool]:
         "Element ids in the brief and tools are authoritative; these are not.]"
     )
 
+    # The archive is read per tool call rather than cached. Notes are a few KB
+    # of markdown each and an agent makes a handful of these calls in a run, so
+    # a cache would buy microseconds at the cost of being wrong about anything
+    # harvested while the process was up.
+    def _find_by_id(article_id: str):
+        if knowledge is not None:
+            note = knowledge.get(article_id)
+            if note is not None:
+                return note
+        return next((n for n in context.articles if n.id == article_id), None)
+
+    def _matching(query: str, limit: int):
+        if knowledge is not None:
+            return knowledge.search(query, limit=limit)
+        needle = query.strip().casefold()
+        return [
+            note
+            for note in context.articles
+            if needle in (note.title + " " + note.summary).casefold()
+            or any(needle in point.casefold() for point in note.key_points)
+        ][:limit]
+
+    def _mentioning(element_id: int, limit: int):
+        if knowledge is not None:
+            return knowledge.for_player(element_id, limit=limit)
+        return [n for n in context.articles if element_id in n.players][:limit]
+
+    def _known_ids() -> str:
+        pool = knowledge.recent(limit=20) if knowledge is not None else context.articles
+        return ", ".join(n.id for n in pool[:10]) or "none"
+
     def _note_block(note) -> str:
         lines = [
             f"### {note.title}",
             f"  id: {note.id} | source: {note.source} | trust: {note.trust} "
             f"| published: {(note.published or note.retrieved).date().isoformat()}"
-            + (" | PARTIAL (paywalled)" if note.access == "partial" else ""),
+            + (
+                f" | PARTIAL ({note.partial_reason or 'incomplete'})"
+                if note.access == "partial"
+                else ""
+            ),
             "",
             note.summary or "(no summary)",
         ]
@@ -421,50 +468,53 @@ def build_tools(context: DecisionContext, client: FPLClient) -> list[BaseTool]:
     def search_articles(query: str, limit: int = 5) -> str:
         """Search harvested FPL articles (tips, team news) by keyword.
 
-        Use it to check whether anyone has written about a player, a fixture or
-        a decision you are weighing -- e.g. 'rotation', 'penalties', a surname.
-        These are other people's opinions: useful signal, not authority.
+        Searches the whole archive, not only the recent ones listed in the
+        brief, so it is worth trying even when nothing in that list looks
+        relevant. Use it to check whether anyone has written about a player, a
+        fixture or a decision you are weighing -- 'rotation', 'penalties', a
+        surname. These are other people's opinions: useful signal, not authority.
         """
-        if not context.articles:
-            return "No harvested articles are available for this run."
-        hits = [
-            note
-            for note in context.articles
-            if query.strip().casefold() in (note.title + " " + note.summary).casefold()
-            or any(query.strip().casefold() in p.casefold() for p in note.key_points)
-        ]
+        hits = _matching(query, min(limit, 10))
         if not hits:
-            titles = ", ".join(n.title[:40] for n in context.articles[:5])
-            return f"Nothing matching '{query}'. Available articles include: {titles}"
-        return _UNTRUSTED + "\n\n" + "\n\n".join(_note_block(n) for n in hits[: min(limit, 10)])
+            return (
+                f"Nothing in the archive matches '{query}'. "
+                "Try a surname or a single word rather than a phrase."
+            )
+        return _UNTRUSTED + "\n\n" + "\n\n".join(_note_block(n) for n in hits)
 
     @tool
     def read_article(article_id: str) -> str:
         """Read the full stored summary of one harvested article by its id.
 
-        Ids come from the article index in the brief or from search_articles.
+        Ids come from the article index in the brief, or from search_articles and
+        articles_about -- including ids older than the brief's list, which this
+        can still open.
         """
-        note = next((n for n in context.articles if n.id == article_id), None)
+        note = _find_by_id(article_id)
         if note is None:
-            available = ", ".join(n.id for n in context.articles[:10]) or "none"
-            return f"No article with id '{article_id}'. Available ids: {available}"
+            return f"No article with id '{article_id}'. Recent ids: {_known_ids()}"
         return _UNTRUSTED + "\n\n" + _note_block(note)
 
     @tool
     def articles_about(element_id: int) -> str:
         """Harvested articles that discuss one specific player.
 
-        Worth checking on a captaincy pick or a transfer target: it is where
-        rotation talk, press-conference quotes and set-piece changes turn up
-        before they reach the FPL API's own news field.
+        Searches the whole archive rather than just the recent list, which is
+        the point: a set-piece change or an injury note written three weeks ago
+        still bears on captaining someone today, and it will have dropped off
+        the brief long before it stops mattering.
+
+        Worth checking on any captaincy pick or transfer target -- it is where
+        rotation talk and press-conference quotes turn up before they reach the
+        FPL API's own news field.
         """
         player = bootstrap.player(element_id)
         if player is None:
             return f"Element {element_id} does not exist. Use find_player to get a real id."
-        hits = [note for note in context.articles if element_id in note.players]
+        hits = _mentioning(element_id, 5)
         if not hits:
             return f"No harvested article mentions {player.web_name} (id {element_id})."
-        return _UNTRUSTED + "\n\n" + "\n\n".join(_note_block(n) for n in hits[:5])
+        return _UNTRUSTED + "\n\n" + "\n\n".join(_note_block(n) for n in hits)
 
     @tool
     def squad_rules() -> str:

@@ -397,8 +397,8 @@ def harvest(
 
     from .knowledge.fetch import Fetcher
     from .knowledge.harvest import harvest as run_harvest
-    from .knowledge.harvest import knowledge_dir
     from .knowledge.sources import load_sources
+    from .knowledge.store import knowledge_dir
 
     config = load_sources(settings.knowledge_sources_file)
     if not config.active:
@@ -439,8 +439,7 @@ def articles(
 ) -> None:
     """List what is in the knowledge store."""
     settings = _setup(verbose)
-    from .knowledge.harvest import knowledge_dir
-    from .knowledge.store import KnowledgeStore
+    from .knowledge.store import KnowledgeStore, knowledge_dir
 
     notes = KnowledgeStore(knowledge_dir(settings)).recent(limit=limit)
     if not notes:

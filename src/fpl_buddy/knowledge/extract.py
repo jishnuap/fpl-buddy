@@ -51,6 +51,105 @@ class Article:
         return len(self.text) >= MIN_USABLE_CHARS
 
 
+def from_markdown(markdown: str, url: str, *, title: str = "", author: str = "",
+                  published: str = "") -> Article | None:
+    """Wrap markdown a backend already extracted for us.
+
+    Firecrawl returns clean markdown, so running it back through an HTML
+    extractor would be lossy for no benefit. The paywall and usability checks
+    still apply -- a hosted renderer receives the same truncated page a paywall
+    serves everyone else.
+    """
+    text = _tidy(_strip_markdown(_drop_interstitial(markdown)))
+    if not text:
+        return None
+    marker = _paywall_marker(text)
+    return Article(
+        url=url,
+        title=(title or url).strip(),
+        text=text,
+        author=author.strip(),
+        published_raw=published.strip(),
+        access="partial" if marker else "full",
+        paywall_marker=marker,
+    )
+
+
+# Text a rendering browser can prepend that a plain HTTP client never sees:
+# consent walls, extension blocks, "enable JavaScript" notices. It arrives ahead
+# of the real article, so summarising without trimming it spends input budget on
+# an error page.
+_INTERSTITIAL_MARKERS = (
+    "err_blocked_by_client",
+    "blocked by an extension",
+    "is blocked",
+    "enable javascript",
+    "accept all cookies",
+    "we use cookies",
+    "consent",
+)
+_INTERSTITIAL_SCAN_LINES = 40
+
+
+def _drop_interstitial(markdown: str) -> str:
+    """Cut everything up to the last interstitial line near the top.
+
+    Only the opening lines are examined: an article that merely mentions
+    cookies or consent halfway down is an article, not a wall.
+    """
+    lines = markdown.splitlines()
+    cut = -1
+    for index, line in enumerate(lines[:_INTERSTITIAL_SCAN_LINES]):
+        lowered = line.casefold()
+        if any(marker in lowered for marker in _INTERSTITIAL_MARKERS):
+            cut = index
+    if cut < 0:
+        return markdown
+
+    # Whatever follows the notice is usually its furniture -- a "Reload" link, a
+    # stray domain. Only leading short lines go, and only once an interstitial
+    # has already been found, so a real article's short opening is safe.
+    remainder = lines[cut + 1 :]
+    while remainder and len(remainder[0].strip()) < 40:
+        remainder.pop(0)
+
+    logger.info("Dropped %d interstitial line(s) from rendered markdown.", len(lines) - len(remainder))
+    return "\n".join(remainder)
+
+
+def from_transcript(transcript, title: str, author: str = "") -> Article | None:
+    """Wrap a video transcript as an article.
+
+    No extraction to do -- captions are already text, with no boilerplate to
+    strip and no markup to unpick. The paywall check is skipped too: a video is
+    not gated behind a subscription in the way a freemium article is, and the
+    markers would only ever fire on someone *saying* the words.
+    """
+    text = _tidy(transcript.text)
+    if not text:
+        return None
+    return Article(
+        url=transcript.url,
+        title=title.strip() or transcript.url,
+        text=text,
+        author=author.strip(),
+        access="full",
+    )
+
+
+def _strip_markdown(markdown: str) -> str:
+    """Drop the syntax, keep the prose.
+
+    The summariser reads this as plain text and links are noise -- a page of
+    "[Read more](https://...)" spends input budget on URLs nobody follows.
+    """
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", markdown)      # images
+    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)        # links -> label
+    text = re.sub(r"^\s{0,3}#{1,6}\s*", "", text, flags=re.M)   # headings
+    text = re.sub(r"[*_`>]+", "", text)                          # emphasis, quotes
+    return text
+
+
 def extract(html: str, url: str) -> Article | None:
     """Pull the article out of a page, or None if there isn't one."""
     if not html.strip():

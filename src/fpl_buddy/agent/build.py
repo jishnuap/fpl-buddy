@@ -80,6 +80,22 @@ def build_model(settings: Settings) -> AzureChatOpenAI:
     return AzureChatOpenAI(**kwargs)
 
 
+def _knowledge_store(settings: Settings):
+    """The article archive the tools can search, or None if harvesting is off.
+
+    Deliberately not read from ``context``: the brief holds a recent window so
+    its token cost stays fixed, and the tools reach past that window. A failure
+    here costs the agent its archive lookups, not the gameweek.
+    """
+    try:
+        from ..knowledge.store import open_archive
+
+        return open_archive(settings)
+    except Exception as exc:  # noqa: BLE001 - enrichment, never required
+        logger.warning("Could not open the article archive (%s); tools will use the brief.", exc)
+        return None
+
+
 def build_agent(
     context: DecisionContext,
     client: FPLClient,
@@ -94,7 +110,7 @@ def build_agent(
     """
     from deepagents import create_deep_agent
 
-    tools = build_tools(context, client)
+    tools = build_tools(context, client, knowledge=_knowledge_store(settings))
     return create_deep_agent(
         model=model if model is not None else build_model(settings),
         tools=tools,

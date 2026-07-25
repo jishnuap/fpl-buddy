@@ -204,6 +204,29 @@ article -- id, date, headline, tags -- and the agent pulls detail with
 make the per-run token cost a function of how long harvesting has been running,
 which is the wrong thing to make it a function of.
 
+**The index is a window; the tools are not.** These are separate on purpose, and
+the first implementation got it wrong: all three tools filtered the same recent
+list the brief renders, so with a 15-article index and 24 on disk, nine were
+unreachable by any means and the documentation claiming otherwise was simply
+false. The brief still shows only `KNOWLEDGE_INDEX_DAYS`/`KNOWLEDGE_INDEX_LIMIT`
+worth, which is what keeps its cost fixed, but the tools query the store
+directly. The case that decides it: a set-piece or injury note written three
+weeks ago still bears on captaining someone today, and it leaves the index long
+before it stops mattering. `ttl_days` is the real expiry, and pruned notes stay
+unreachable through either path.
+
+The archive is read per tool call rather than cached. Notes are a few KB each and
+an agent makes a handful of these calls, so a cache would buy microseconds while
+being wrong about anything harvested since the process started.
+
+**Reading the archive does not depend on the harvest being configured.**
+`KNOWLEDGE_SOURCES_FILE` says whether the daily job should *collect* articles,
+which is a different question from whether there are any to read. Gating both on
+it meant a `propose` run without that variable set silently reasoned with no
+articles at all -- no index, no tools, no error. `open_archive()` keys on notes
+existing instead, so a moved or unset source list cannot quietly cost the agent
+everything already collected.
+
 **Feeds first, crawling last.** A feed is the publisher stating what is new, in
 a format that does not change on redesign; one request answers "anything new?"
 for a whole site. Crawling listing pages is the fallback, and if the feeds
@@ -230,6 +253,80 @@ commercial content, and they break silently besides.
 Extraction detects the cut and marks the note `access: partial`, because
 summarising an intro as though it were the analysis is worse than knowing you
 only have the intro.
+
+**Article fetching is a chain, and only fetching differs between links.** The
+first version had Firecrawl return markdown and skip the extractor, on the
+grounds that it had already done the work. Measured against a real site, that
+was wrong: on Fantasy Football Scout, `only_main_content` markdown came back at
+**36,000 characters** of comment threads and navigation wrapped around a **1,900
+character** article, while `trafilatura` on the same page returned exactly the
+article. Feeding the summariser the former costs most of its input budget and
+produces a worse note.
+
+So Firecrawl is asked for markdown *and* HTML, and the HTML goes through the
+same extractor every other backend uses. All three now produce byte-identical
+text on the same page. Firecrawl's value is reduced to what it is actually
+better at -- reaching pages that plain HTTP cannot, by rendering JavaScript and
+getting past bot protection -- and boilerplate removal stays in one place where
+it can be reasoned about. Markdown is kept only as the fallback for a page that
+yields no HTML.
+
+**Firecrawl is metered, so it is spent only where it counts.** One credit per
+page, 1000 a month on the free tier. A daily harvest of 26 articles is 780 a
+month, which leaves little room for error, so feeds, sitemaps, `robots.txt` and
+listing pages are always fetched with plain HTTP -- they are cheap XML and HTML
+that needs no rendering, and routing them through Firecrawl would add roughly
+another 150 a month for nothing. Remaining credits are read from
+`get_credit_usage()` rather than tallied locally, because a local counter misses
+usage from elsewhere and resets exactly when state is lost.
+`FIRECRAWL_CREDIT_RESERVE` stops the harvester before it spends the last of the
+month's budget.
+
+**Rendering surfaces junk that plain HTTP never sees.** A headless browser
+collects consent walls, "enable JavaScript" notices and extension-block
+interstitials, and they arrive *ahead* of the article -- the BBC's pages came
+back beginning with `ERR_BLOCKED_BY_CLIENT`. Those leading lines are trimmed
+before summarising. Only the opening of a document is examined, so an article
+that merely discusses cookies halfway down is left alone.
+
+**A YouTube channel is a source kind, not a second pipeline.** Discovery uses
+the per-channel upload feed and the content is the caption track; everything
+after that -- summarising into the same schema, resolving player names, the
+markdown note, the TTL -- is shared with articles. Only two steps differ: there
+is no extraction to do, because captions are already text with no boilerplate,
+and the input budget is separate. A half-hour video runs to ~28,000 characters
+against an article budget of 12,000, so reusing it would discard most of the
+video and then report it as truncated. `TRANSCRIPT_INPUT_CHARS` handles it in
+one call; chunk-and-merge was the alternative and costs more tokens *and* more
+failure modes for a problem a larger budget solves outright.
+
+Speech recognition mangles surnames, which would matter if names were matched
+against the raw captions. They are not: ids resolve from the *summary's*
+`player_names`, which the model spells correctly from context, so the existing
+design absorbs most of it.
+
+Timestamps are marked through the transcript roughly once a minute, so a claim
+can cite a point in the video and be checked against it -- the same provenance
+role the stored `Source extract` plays for articles.
+
+**A channel id comes from the page's canonical link, never from the first one
+that looks right.** The first `"channelId"` in a YouTube channel page belongs to
+something else -- a recommendation, or the owner of an embedded video. Matching
+it resolved `@LetsTalkFPL` to "Let's Talk Football", a different channel, and
+nothing downstream noticed: the feed parsed, transcripts fetched, notes stored,
+and the archive quietly filled with international-tournament reaction instead of
+FPL. The `<link rel="canonical">` id is the page stating its own address, with
+`externalId` as a second opinion. There is deliberately no fallback to a loose
+match, because a wrong-but-plausible id is exactly the failure that hides.
+
+**Robots exceptions are per source, written down, and off by default.** YouTube
+disallows both `/feeds/videos.xml` and `/api/` to crawlers, and the transcript
+library brings its own HTTP client that never passes through `fetch.py` at all.
+Left implicit, that would quietly falsify the "we honour robots.txt" property
+the rest of the harvester has. `ignore_robots: true` makes the exception a thing
+you can grep for, and a YouTube source that omits it is warned at load time that
+it will find nothing. The question of whether to set it is the operator's, and
+YouTube's terms on automated access are a separate one from robots.
 
 **Untrusted web text is contained at the summariser, not at the reader.** This
 is the first feature that puts arbitrary web prose into a prompt that drives real
