@@ -8,6 +8,7 @@ the club code, and the fixtures should punish it if it doesn't.
 """
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 OUT = Path(__file__).parent
@@ -59,11 +60,34 @@ def build_players():
                         "chance_of_playing_next_round": None,
                         "news": "",
                         "cost_change_event": 0,
+                        "ep_next": "4.1",
+                        # Underlying numbers. Attackers get real xG, defenders
+                        # get xGC, so position-specific rendering has something
+                        # to show. Strings and floats are mixed on purpose:
+                        # that's what the live API does.
+                        "expected_goals_per_90": 0.45 if element_type == 4 else 0.08,
+                        "expected_assists_per_90": 0.22 if element_type == 3 else 0.05,
+                        "expected_goal_involvements_per_90": (
+                            0.67 if element_type == 4 else 0.27 if element_type == 3 else 0.13
+                        ),
+                        "expected_goals_conceded_per_90": 1.15 if element_type <= 2 else 1.4,
+                        "starts": 30 - i * 4,
+                        "starts_per_90": round(max(0.2, 1.0 - i * 0.15), 2),
+                        "defensive_contribution": 40 if element_type <= 2 else 12,
+                        "defensive_contribution_per_90": 1.9 if element_type <= 2 else 0.4,
+                        "transfers_in_event": 12_000 - i * 900,
+                        "transfers_out_event": 3_000 + i * 400,
+                        "ict_index": str(round(60.0 - i * 5.5, 1)),
+                        # Set-piece duty: first-choice taker per club per type.
+                        "penalties_order": 1 if (element_type == 4 and i == 0) else None,
+                        "direct_freekicks_order": 1 if (element_type == 3 and i == 0) else None,
+                        "corners_and_indirect_freekicks_order": (
+                            1 if (element_type == 3 and i == 1) else None
+                        ),
                         # Real fields the model doesn't declare, to prove extras are ignored.
                         "goals_scored": 3,
                         "assists": 2,
                         "clean_sheets": 4,
-                        "ep_next": "4.1",
                     }
                 )
     return rows
@@ -93,6 +117,15 @@ def apply_overrides(rows):
     by_id[320].update(status="i", chance_of_playing_next_round=25, news="Hamstring injury")
     # Deliberately unaffordable, for the over-budget test.
     by_id[642].update(now_cost=130)
+    # Nulls and blanks in every numeric the API can leave empty for a player
+    # with no minutes. The parser has to survive this: one null in a 558-player
+    # payload must not cost a gameweek.
+    by_id[611].update(
+        ep_next=None, form=None, points_per_game=None, selected_by_percent=None,
+        expected_goals_per_90=None, expected_assists_per_90=None,
+        expected_goal_involvements_per_90=None, expected_goals_conceded_per_90=None,
+        starts_per_90=None, defensive_contribution_per_90=None, ict_index="",
+    )
     return rows
 
 
@@ -128,7 +161,14 @@ def teams():
             "strength": 4,
             "strength_overall_home": 1300 + team_id,
             "strength_overall_away": 1280 + team_id,
-            "strength_attack_home": 1290, "strength_defence_home": 1270,
+            "strength_attack_home": 1290 + team_id,
+            "strength_attack_away": 1260 + team_id,
+            "strength_defence_home": 1270 + team_id,
+            "strength_defence_away": 1240 + team_id,
+            "form": None,  # null in the live API; must not break parsing
+            "position": team_id,
+            "played": 3,
+            "points": 9 - team_id,
         }
         for team_id, name, short in TEAMS
     ]
@@ -274,11 +314,43 @@ def fixtures():
     ]
 
 
+# Rotated pairings per gameweek, so each club's fixture run differs and a test
+# can tell a real horizon from the current gameweek repeated.
+FUTURE_PAIRINGS = {
+    4: [(1, 2), (3, 4), (5, 6)],
+    5: [(2, 3), (4, 5), (6, 1)],
+    6: [(1, 3), (2, 5), (4, 6)],
+    7: [(3, 1), (5, 2), (6, 4)],
+    8: [(1, 4), (2, 6), (3, 5)],
+}
+
+
+def future_fixtures():
+    """What ``/fixtures/?future=1`` returns: every unplayed fixture, all gameweeks."""
+    first_kickoff = datetime(2025, 9, 13, 14, 0, tzinfo=UTC)
+    rows = []
+    fixture_id = 30
+    for event, pairs in FUTURE_PAIRINGS.items():
+        kickoff = first_kickoff + timedelta(days=7 * (event - 4))
+        for i, (h, a) in enumerate(pairs):
+            rows.append(
+                {
+                    "id": fixture_id, "event": event, "team_h": h, "team_a": a,
+                    "team_h_difficulty": 2 + i, "team_a_difficulty": 4 - i,
+                    "kickoff_time": kickoff.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "finished": False, "started": False, "minutes": 0,
+                }
+            )
+            fixture_id += 1
+    return rows
+
+
 snapshot, expected_join = solio()
 for name, payload in (
     ("bootstrap-static.json", bootstrap()),
     ("my-team.json", my_team()),
     ("fixtures.json", fixtures()),
+    ("fixtures-future.json", future_fixtures()),
     ("solio-latest.json", snapshot),
     ("solio-expected-join.json", expected_join),
 ):

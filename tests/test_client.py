@@ -31,10 +31,11 @@ from fpl_buddy.fpl.client import (
     FPLApiError,
     FPLClient,
     TransferRejected,
+    parse_bootstrap,
     parse_my_team,
 )
 
-from .conftest import FREE_MID_NEW, FWD_CAPTAIN, MID_LIV, MID_VICE, load_json
+from .conftest import DEF_ARS, FREE_MID_NEW, FWD_CAPTAIN, MID_LIV, MID_VICE, load_json
 
 API = "https://fantasy.premierleague.com/api"
 LOGIN = "https://users.premierleague.com/accounts/login/"
@@ -203,6 +204,85 @@ def test_fixtures_pass_the_event_filter(authed_settings):
     fixtures = FPLClient(authed_settings).fixtures(event=4)
     assert len(fixtures) == 3
     assert route.calls[0].request.url.params["event"] == "4"
+
+
+@respx.mock
+def test_future_fixtures_ask_for_the_whole_horizon(authed_settings):
+    route = respx.get(f"{API}/fixtures/").mock(
+        return_value=httpx.Response(200, json=load_json("fixtures-future.json"))
+    )
+    fixtures = FPLClient(authed_settings).fixtures(future=True)
+    assert route.calls[0].request.url.params["future"] == "1"
+    assert {f.event for f in fixtures} == {4, 5, 6, 7, 8}, "more than one gameweek"
+
+
+@respx.mock
+def test_an_explicit_event_wins_over_future(authed_settings):
+    route = respx.get(f"{API}/fixtures/").mock(
+        return_value=httpx.Response(200, json=load_json("fixtures.json"))
+    )
+    FPLClient(authed_settings).fixtures(event=4, future=True)
+    params = route.calls[0].request.url.params
+    assert params["event"] == "4"
+    assert "future" not in params
+
+
+@respx.mock
+def test_set_piece_notes_are_fetched(authed_settings):
+    payload = {"teams": [{"id": 1, "notes": [{"info_message": "Saka on pens"}]}]}
+    respx.get(f"{API}/team/set-piece-notes/").mock(
+        return_value=httpx.Response(200, json=payload)
+    )
+    assert FPLClient(authed_settings).set_piece_notes() == payload
+
+
+# ------------------------------------------------------- the richer player model
+
+
+def test_the_opta_underlying_numbers_are_parsed(authed_settings):
+    """xG/xA come from the FPL API directly -- there is no scraper for this."""
+    boot = parse_bootstrap(load_json("bootstrap-static.json"))
+    striker = boot.player(FWD_CAPTAIN)
+    assert striker.expected_goals_per_90 == 0.45
+    assert striker.expected_goal_involvements_per_90 == 0.67
+    assert striker.starts_per_90 == 1.0
+    assert striker.ep_next == 4.1
+
+
+def test_set_piece_order_becomes_a_readable_role(authed_settings):
+    boot = parse_bootstrap(load_json("bootstrap-static.json"))
+    assert boot.player(FWD_CAPTAIN).set_piece_duties == "P1", "first-choice penalties"
+    assert boot.player(230).set_piece_duties == "F1", "first-choice direct free kicks"
+    assert boot.player(231).set_piece_duties == "C1", "first-choice corners"
+    assert boot.player(DEF_ARS).set_piece_duties == "", "takes nothing"
+
+
+def test_nulls_in_the_numeric_fields_do_not_kill_the_parse():
+    """One null in a 558-player payload must not cost a gameweek."""
+    boot = parse_bootstrap(load_json("bootstrap-static.json"))
+    blank = boot.player(611)
+    assert blank.expected_goals_per_90 == 0.0
+    assert blank.starts_per_90 == 0.0
+    assert blank.ict_index == 0.0
+    assert blank.form == 0.0
+    assert blank.ep_next is None, "no projection is different from a projection of zero"
+
+
+def test_team_strength_is_split_by_attack_defence_and_venue():
+    boot = parse_bootstrap(load_json("bootstrap-static.json"))
+    team = boot.team(1)
+    assert team.strength_attack_home == 1291
+    assert team.strength_defence_away == 1241
+    assert team.has_strength_data is True
+    assert team.form is None, "null pre-season, and that must parse"
+
+
+def test_a_preseason_team_reports_no_strength_data():
+    boot = parse_bootstrap(load_json("bootstrap-static.json"))
+    team = boot.team(1)
+    team.strength_attack_home = team.strength_attack_away = 0
+    team.strength_defence_home = team.strength_defence_away = 0
+    assert team.has_strength_data is False
 
 
 @respx.mock

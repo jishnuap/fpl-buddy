@@ -14,7 +14,16 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from ..config import Settings
 from .auth import FPLAuthenticator, FPLAuthError, SessionCookies
-from .models import Bootstrap, Fixture, Gameweek, MyTeam, Pick, Player, Team
+from .models import (
+    UNLIMITED_FREE_TRANSFERS,
+    Bootstrap,
+    Fixture,
+    Gameweek,
+    MyTeam,
+    Pick,
+    Player,
+    Team,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -156,11 +165,22 @@ class FPLClient:
         self._bootstrap = parse_bootstrap(data)
         return self._bootstrap
 
-    def fixtures(self, *, event: int | None = None) -> list[Fixture]:
+    def fixtures(self, *, event: int | None = None, future: bool = False) -> list[Fixture]:
+        """Fixtures for one gameweek (``event``), or every unplayed one (``future``).
+
+        ``future=1`` is what makes multi-gameweek reasoning possible: a transfer
+        is judged over the next few weeks, not just the one being submitted.
+        """
         url = f"{self.settings.fpl_api_base}/fixtures/"
         if event is not None:
             url += f"?event={event}"
+        elif future:
+            url += "?future=1"
         return [Fixture.model_validate(f) for f in self._get_json(url)]
+
+    def set_piece_notes(self) -> dict:
+        """Official per-club set-piece notes. Placeholder text until the season starts."""
+        return self._get_json(f"{self.settings.fpl_api_base}/team/set-piece-notes/")
 
     def player_summary(self, element_id: int) -> dict:
         """Per-player history and upcoming fixtures."""
@@ -265,11 +285,6 @@ class FPLClient:
 # --------------------------------------------------------------------- parsing
 # Kept as module-level functions, not methods, so tests can feed them recorded
 # JSON fixtures and exercise exactly the code that runs in production.
-
-# Free transfers when FPL reports no limit (wildcard / pre-season): effectively
-# unlimited, and 15 is the most any legal set of transfers can use.
-UNLIMITED_FREE_TRANSFERS = 15
-
 
 def parse_bootstrap(data: dict) -> Bootstrap:
     return Bootstrap(

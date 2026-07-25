@@ -81,6 +81,12 @@ def fixtures_list() -> list[Fixture]:
 
 
 @pytest.fixture
+def future_fixtures_list() -> list[Fixture]:
+    """Every unplayed fixture, GW4-GW8 -- what ``?future=1`` returns."""
+    return [Fixture.model_validate(f) for f in load_json("fixtures-future.json")]
+
+
+@pytest.fixture
 def solio(bootstrap: Bootstrap):
     snapshot = parse_snapshot(load_json("solio-latest.json"))
     snapshot, _unmatched = join_to_elements(snapshot, bootstrap)
@@ -103,7 +109,7 @@ def settings(tmp_path: Path) -> Settings:
 
 
 @pytest.fixture
-def context(bootstrap, my_team, fixtures_list) -> DecisionContext:
+def context(bootstrap, my_team, fixtures_list, future_fixtures_list) -> DecisionContext:
     gameweek = bootstrap.next_gameweek
     assert gameweek is not None and gameweek.id == NEXT_GAMEWEEK
     return DecisionContext(
@@ -112,6 +118,8 @@ def context(bootstrap, my_team, fixtures_list) -> DecisionContext:
         bootstrap=bootstrap,
         fixtures=fixtures_list,
         solio=None,
+        horizon_fixtures=future_fixtures_list,
+        horizon_gameweeks=5,
     )
 
 
@@ -172,17 +180,24 @@ class FakeClient:
         my_team: MyTeam,
         fixtures: list[Fixture],
         *,
+        future_fixtures: list[Fixture] | None = None,
         transfers_error: Exception | None = None,
         picks_error: Exception | None = None,
+        future_fixtures_error: Exception | None = None,
+        set_piece_notes_payload: dict | None = None,
     ) -> None:
         self._bootstrap = bootstrap
         self._my_team = my_team
         self._fixtures = fixtures
+        self._future_fixtures = future_fixtures if future_fixtures is not None else fixtures
         self.transfers_error = transfers_error
         self.picks_error = picks_error
+        self.future_fixtures_error = future_fixtures_error
+        self._set_piece_notes = set_piece_notes_payload or {"teams": []}
         self.transfer_calls: list[dict] = []
         self.picks_calls: list[dict] = []
         self.bootstrap_calls = 0
+        self.set_piece_notes_calls = 0
 
     def bootstrap(self, *, refresh: bool = False) -> Bootstrap:
         self.bootstrap_calls += 1
@@ -191,8 +206,16 @@ class FakeClient:
     def my_team(self, entry_id: int | None = None) -> MyTeam:
         return self._my_team
 
-    def fixtures(self, *, event: int | None = None) -> list[Fixture]:
+    def fixtures(self, *, event: int | None = None, future: bool = False) -> list[Fixture]:
+        if future:
+            if self.future_fixtures_error is not None:
+                raise self.future_fixtures_error
+            return self._future_fixtures
         return self._fixtures
+
+    def set_piece_notes(self) -> dict:
+        self.set_piece_notes_calls += 1
+        return self._set_piece_notes
 
     def player_summary(self, element_id: int) -> dict:
         raise AssertionError("player_summary should not be called in this test")
@@ -213,8 +236,8 @@ class FakeClient:
 
 
 @pytest.fixture
-def fake_client(bootstrap, my_team, fixtures_list) -> FakeClient:
-    return FakeClient(bootstrap, my_team, fixtures_list)
+def fake_client(bootstrap, my_team, fixtures_list, future_fixtures_list) -> FakeClient:
+    return FakeClient(bootstrap, my_team, fixtures_list, future_fixtures=future_fixtures_list)
 
 
 @pytest.fixture

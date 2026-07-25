@@ -79,6 +79,19 @@ is `AUTO_COMMIT_ENABLED=true`.
 **Solio returns 403.** Some networks and proxies block it. Projections are
 optional — the run continues and the brief says they were unavailable.
 
+**The proposal never suggests any transfers.** Check what the brief says about
+free transfers (`fpl-buddy context | head -5`). If you have unlimited transfers
+it must read "Free transfers: unlimited" and the brief must carry a "Transfers
+are free this gameweek" section — with a bare number there instead, the agent
+reads a finite budget and rolls. In a normal one-or-two-transfer week, rolling is
+frequently the correct answer and not a bug; check the proposal's reasoning
+before assuming otherwise.
+
+**Every proposal fails with `captain_not_in_squad`.** The brief should contain a
+`## Legal captain / vice options` section listing only players you own. If it is
+missing, the agent is picking from the league-wide projection leaderboards
+instead. `fpl-buddy context` shows whether the section is being generated.
+
 **Discord button says "This interaction failed".** Either the container was
 mid-restart when you clicked (retry once it's back — buttons are stateless
 and survive a restart), or the bot's permissions in that channel are missing
