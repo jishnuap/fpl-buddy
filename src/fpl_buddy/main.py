@@ -36,6 +36,28 @@ def configure_logging(level: str) -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
+async def _connect_discord_bot(bot, token: str, *, timeout: float = 30) -> None:
+    """Log in, background the gateway loop, and don't return until ready.
+
+    ``bot.start()`` is a shorthand for ``login()`` then ``connect()`` -- calling
+    it as a single background task and immediately checking
+    ``wait_until_ready()`` is a real race: readiness can be checked before
+    ``login()`` has even set up the state it depends on, raising
+    ``RuntimeError: Client has not been properly initialised``. Awaiting
+    ``login()`` directly avoids it; only the long-lived ``connect()`` loop goes
+    on a background task.
+    """
+    await bot.login(token)
+    asyncio.create_task(bot.connect())
+    try:
+        await asyncio.wait_for(bot.wait_until_ready(), timeout=timeout)
+    except TimeoutError as exc:
+        raise RuntimeError(
+            f"Discord bot did not become ready within {timeout:.0f}s -- "
+            "check DISCORD_BOT_TOKEN."
+        ) from exc
+
+
 def build_app():
     settings = get_settings()
     bot = None
@@ -60,13 +82,7 @@ def build_app():
     @asynccontextmanager
     async def lifespan(app):
         if bot is not None:
-            asyncio.create_task(bot.start(settings.discord_bot_token.get_secret_value()))
-            try:
-                await asyncio.wait_for(bot.wait_until_ready(), timeout=30)
-            except TimeoutError as exc:
-                raise RuntimeError(
-                    "Discord bot did not become ready within 30s -- check DISCORD_BOT_TOKEN."
-                ) from exc
+            await _connect_discord_bot(bot, settings.discord_bot_token.get_secret_value())
             logger.info("Discord bot connected; notifications will post to channel %s.",
                         settings.discord_channel_id)
         scheduler.start()
