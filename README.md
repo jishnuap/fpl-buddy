@@ -126,9 +126,22 @@ That keeps the token cost flat as the archive grows.
 > tipster can — but not issue instructions, and deterministic validation plus
 > your approval still sit underneath. See [decisions.md](docs/decisions.md).
 
+Article pages are fetched by the first available backend in
+`KNOWLEDGE_FETCH_BACKENDS`: **Firecrawl** (renders JavaScript, gets past bot
+protection; 1 credit/page, optional), **Scrapling** (local, free, browser TLS
+impersonation; optional), then **httpx** (always there). Only article pages use
+them — feeds and `robots.txt` stay on plain HTTP, which keeps a 26-article daily
+harvest to ~780 of Firecrawl's 1000 free monthly credits.
+
+Whichever backend fetches, the same extractor runs on the HTML, so all three
+produce identical text. That is deliberate: Firecrawl's own markdown returned
+36k characters of comment threads around a 1.9k article on one site.
+
 Paywalled sources yield only their free portion, marked `access: partial`. If you
 hold a subscription, `cookie_env` names an environment variable holding your own
-session cookie. There is no paywall circumvention here and there won't be.
+session cookie. There is no paywall circumvention here and there won't be —
+verified: Firecrawl does not recover gated sections either, because the server
+never sends them.
 
 ## Notifications
 

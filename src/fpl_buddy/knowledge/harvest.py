@@ -14,8 +14,9 @@ from pathlib import Path
 
 from ..config import Settings
 from ..fpl.models import Bootstrap
+from .backends import build_backends, fetch_article
 from .discover import discover
-from .extract import extract
+from .extract import extract, from_markdown
 from .fetch import Fetcher
 from .sources import Source, load_sources
 from .store import ArticleNote, KnowledgeStore, content_hash, make_id
@@ -33,12 +34,15 @@ class HarvestReport:
     partial: int = 0
     pruned: int = 0
     failures: list[str] = field(default_factory=list)
+    by_backend: dict[str, int] = field(default_factory=dict)
 
     def summary(self) -> str:
+        backends = ", ".join(f"{n}:{c}" for n, c in sorted(self.by_backend.items()))
         return (
             f"{self.stored} new article(s) from {self.considered} candidate(s); "
             f"{self.skipped_known} already known, {self.partial} paywalled, "
             f"{self.pruned} pruned, {len(self.failures)} failure(s)"
+            + (f" [fetched via {backends}]" if backends else "")
         )
 
 
@@ -62,11 +66,16 @@ def harvest(
 
     store = store or KnowledgeStore(knowledge_dir(settings))
     fetcher = Fetcher(settings)
+    # Built once per run: availability checks hit the network (a Firecrawl
+    # credit lookup), and doing that per source would be wasteful and noisy.
+    backends = build_backends(settings, fetcher)
     known = store.known_urls()
 
     for source in config.active:
         try:
-            _harvest_source(source, settings, fetcher, store, known, report, bootstrap, model)
+            _harvest_source(
+                source, settings, fetcher, backends, store, known, report, bootstrap, model
+            )
         except Exception as exc:  # noqa: BLE001 - one bad source must not stop the rest
             logger.exception("Harvesting source %s failed.", source.name)
             report.failures.append(f"{source.name}: {exc}")
@@ -80,6 +89,7 @@ def _harvest_source(
     source: Source,
     settings: Settings,
     fetcher: Fetcher,
+    backends: list,
     store: KnowledgeStore,
     known: dict[str, str],
     report: HarvestReport,
@@ -94,14 +104,25 @@ def _harvest_source(
             report.skipped_known += 1
             continue
 
-        response = fetcher.get(candidate.url, source=source)
-        if not response.ok:
-            if response.status not in (304, 999):
-                report.failures.append(f"{source.name}: {candidate.url} -> {response.status}")
+        content = fetch_article(candidate.url, source, backends)
+        if content is None:
+            report.failures.append(f"{source.name}: could not fetch {candidate.url}")
             continue
         report.fetched += 1
+        report.by_backend[content.backend] = report.by_backend.get(content.backend, 0) + 1
 
-        article = extract(response.text, candidate.url)
+        # HTML first, whichever backend produced it, so every article goes
+        # through the same boilerplate removal. Markdown is only used when a
+        # backend could not give us HTML at all.
+        article = extract(content.html, candidate.url) if content.html else None
+        if article is None and content.markdown:
+            article = from_markdown(
+                content.markdown,
+                candidate.url,
+                title=content.title,
+                author=content.author,
+                published=content.published,
+            )
         if article is None or not article.usable:
             logger.info("Nothing usable extracted from %s.", candidate.url)
             continue

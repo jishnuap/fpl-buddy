@@ -231,6 +231,41 @@ Extraction detects the cut and marks the note `access: partial`, because
 summarising an intro as though it were the analysis is worse than knowing you
 only have the intro.
 
+**Article fetching is a chain, and only fetching differs between links.** The
+first version had Firecrawl return markdown and skip the extractor, on the
+grounds that it had already done the work. Measured against a real site, that
+was wrong: on Fantasy Football Scout, `only_main_content` markdown came back at
+**36,000 characters** of comment threads and navigation wrapped around a **1,900
+character** article, while `trafilatura` on the same page returned exactly the
+article. Feeding the summariser the former costs most of its input budget and
+produces a worse note.
+
+So Firecrawl is asked for markdown *and* HTML, and the HTML goes through the
+same extractor every other backend uses. All three now produce byte-identical
+text on the same page. Firecrawl's value is reduced to what it is actually
+better at -- reaching pages that plain HTTP cannot, by rendering JavaScript and
+getting past bot protection -- and boilerplate removal stays in one place where
+it can be reasoned about. Markdown is kept only as the fallback for a page that
+yields no HTML.
+
+**Firecrawl is metered, so it is spent only where it counts.** One credit per
+page, 1000 a month on the free tier. A daily harvest of 26 articles is 780 a
+month, which leaves little room for error, so feeds, sitemaps, `robots.txt` and
+listing pages are always fetched with plain HTTP -- they are cheap XML and HTML
+that needs no rendering, and routing them through Firecrawl would add roughly
+another 150 a month for nothing. Remaining credits are read from
+`get_credit_usage()` rather than tallied locally, because a local counter misses
+usage from elsewhere and resets exactly when state is lost.
+`FIRECRAWL_CREDIT_RESERVE` stops the harvester before it spends the last of the
+month's budget.
+
+**Rendering surfaces junk that plain HTTP never sees.** A headless browser
+collects consent walls, "enable JavaScript" notices and extension-block
+interstitials, and they arrive *ahead* of the article -- the BBC's pages came
+back beginning with `ERR_BLOCKED_BY_CLIENT`. Those leading lines are trimmed
+before summarising. Only the opening of a document is examined, so an article
+that merely discusses cookies halfway down is left alone.
+
 **Untrusted web text is contained at the summariser, not at the reader.** This
 is the first feature that puts arbitrary web prose into a prompt that drives real
 team decisions, so the boundary is drawn where the text arrives:

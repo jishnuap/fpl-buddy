@@ -34,6 +34,12 @@ azure = [
     "azure-data-tables>=12.5",
     "azure-communication-email>=1.0",
 ]
+# Optional article-fetch backends. Neither is required: without them the
+# harvester uses plain httpx, which is what it did before they existed.
+firecrawl = ["firecrawl-py>=4.0"]
+# Pulls playwright/patchright. The plain Fetcher needs no browser binaries;
+# SCRAPLING_STEALTH=true additionally requires `scrapling install`.
+scrapling = ["scrapling[fetchers]>=0.4"]
 dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
@@ -68,7 +74,10 @@ warn_unused_ignores = true
 
 # Third parties without stubs, plus the azure extra which isn't always installed.
 [[tool.mypy.overrides]]
-module = ["apscheduler.*", "azure.*", "deepagents.*", "itsdangerous.*"]
+module = [
+    "apscheduler.*", "azure.*", "deepagents.*", "itsdangerous.*",
+    "firecrawl.*", "scrapling.*", "trafilatura.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

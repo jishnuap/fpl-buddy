@@ -828,3 +828,249 @@ def test_a_summariser_failure_costs_one_article_not_the_run(
     assert report.stored == 0
     assert report.failures, "the failure is reported rather than swallowed silently"
     assert store.all() == []
+
+
+# --------------------------------------------------------------------- backends
+#
+# The real SDKs are optional installs and absent in CI, so nothing here imports
+# them. Backends are driven through injected fakes, which is also the only way
+# to exercise credit exhaustion without spending credits.
+
+
+class _FakeFirecrawlDoc:
+    def __init__(self, markdown="", html="", title="", author="", published=""):
+        self.markdown = markdown
+        self.html = html
+        self.metadata = {"title": title, "author": author, "publishedTime": published}
+
+
+class _FakeFirecrawlClient:
+    def __init__(self, *, remaining=1000, doc=None, error=None):
+        self.remaining = remaining
+        self.doc = doc if doc is not None else _FakeFirecrawlDoc(html="<article>hi</article>")
+        self.error = error
+        self.scrapes: list[str] = []
+
+    def get_credit_usage(self):
+        return {"remaining_credits": self.remaining}
+
+    def scrape(self, url, **kwargs):
+        if self.error:
+            raise self.error
+        self.scrapes.append(url)
+        return self.doc
+
+
+def _firecrawl(settings, client):
+    """A FirecrawlBackend wired to a fake client, skipping the real import."""
+    from fpl_buddy.knowledge.backends import FirecrawlBackend
+
+    backend = FirecrawlBackend(settings)
+    backend._client = client
+    backend._credits_left = client.remaining
+    return backend
+
+
+def test_firecrawl_is_skipped_without_a_key(settings):
+    from fpl_buddy.knowledge.backends import FirecrawlBackend
+
+    assert not settings.firecrawl_api_key.get_secret_value()
+    assert FirecrawlBackend(settings).available() is False
+
+
+def test_firecrawl_returns_both_html_and_markdown(settings):
+    client = _FakeFirecrawlClient(
+        doc=_FakeFirecrawlDoc(markdown="# hi", html="<article>hi</article>", title="Hi")
+    )
+    content = _firecrawl(settings, client).fetch(f"{HOST}/a", make_source())
+
+    assert content is not None
+    assert content.backend == "firecrawl"
+    assert content.html == "<article>hi</article>"
+    assert content.markdown == "# hi"
+    assert content.title == "Hi", "metadata must survive -- it is an object, not a string"
+
+
+def test_firecrawl_stops_at_the_credit_reserve(settings):
+    """The free tier is finite; a harvest must not spend the last of it."""
+    settings.firecrawl_credit_reserve = 50
+    client = _FakeFirecrawlClient(remaining=51)
+    backend = _firecrawl(settings, client)
+
+    assert backend.fetch(f"{HOST}/a", make_source()) is not None
+    assert backend.fetch(f"{HOST}/b", make_source()) is None, "reserve reached"
+    assert len(client.scrapes) == 1
+
+
+def test_firecrawl_failure_falls_through_rather_than_raising(settings):
+    client = _FakeFirecrawlClient(error=RuntimeError("upstream is down"))
+    assert _firecrawl(settings, client).fetch(f"{HOST}/a", make_source()) is None
+
+
+def test_firecrawl_passes_a_configured_subscription_cookie(settings, monkeypatch):
+    """Authenticated access to content you pay for, not a paywall bypass."""
+    monkeypatch.setenv("TEST_COOKIE", "session=abc")
+    seen = {}
+
+    class _Recording(_FakeFirecrawlClient):
+        def scrape(self, url, **kwargs):
+            seen.update(kwargs)
+            return self.doc
+
+    _firecrawl(settings, _Recording()).fetch(
+        f"{HOST}/a", make_source(cookie_env="TEST_COOKIE")
+    )
+    assert seen["headers"]["Cookie"] == "session=abc"
+    assert "html" in seen["formats"] and "markdown" in seen["formats"]
+
+
+def test_an_empty_firecrawl_document_is_not_usable(settings):
+    client = _FakeFirecrawlClient(doc=_FakeFirecrawlDoc(markdown="  ", html=""))
+    assert _firecrawl(settings, client).fetch(f"{HOST}/a", make_source()) is None
+
+
+def test_scrapling_is_skipped_when_not_installed(settings, monkeypatch):
+    import builtins
+
+    from fpl_buddy.knowledge.backends import ScraplingBackend
+
+    real_import = builtins.__import__
+
+    def no_scrapling(name, *args, **kwargs):
+        if name.startswith("scrapling"):
+            raise ImportError("not installed")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_scrapling)
+    assert ScraplingBackend(settings).available() is False
+
+
+def test_scrapling_returns_html_and_rejects_non_200(settings):
+    from fpl_buddy.knowledge.backends import ScraplingBackend
+
+    class _Response:
+        def __init__(self, status, html):
+            self.status = status
+            self.html_content = html
+
+    class _Fetcher:
+        def __init__(self, response):
+            self.response = response
+
+        def get(self, url, **kwargs):
+            return self.response
+
+    ok = ScraplingBackend(settings)
+    ok._fetcher = _Fetcher(_Response(200, "<article>hello</article>"))
+    content = ok.fetch(f"{HOST}/a", make_source())
+    assert content is not None and content.backend == "scrapling"
+
+    blocked = ScraplingBackend(settings)
+    blocked._fetcher = _Fetcher(_Response(403, "denied"))
+    assert blocked.fetch(f"{HOST}/a", make_source()) is None
+
+
+def test_httpx_backend_is_always_available(settings, fetcher):
+    from fpl_buddy.knowledge.backends import HttpxBackend
+
+    assert HttpxBackend(fetcher).available() is True
+
+
+def test_the_chain_falls_through_to_the_next_backend(settings, fetcher):
+    from fpl_buddy.knowledge.backends import ArticleContent, Backend, fetch_article
+
+    class _Dead(Backend):
+        name = "dead"
+
+        def fetch(self, url, source):
+            return None
+
+    class _Works(Backend):
+        name = "works"
+
+        def fetch(self, url, source):
+            return ArticleContent(url=url, html="<article>x</article>", backend=self.name)
+
+    got = fetch_article(f"{HOST}/a", make_source(), [_Dead(), _Works()])
+    assert got is not None and got.backend == "works"
+
+
+def test_the_chain_returns_nothing_when_every_backend_fails(settings):
+    from fpl_buddy.knowledge.backends import Backend, fetch_article
+
+    class _Dead(Backend):
+        name = "dead"
+
+        def fetch(self, url, source):
+            return None
+
+    assert fetch_article(f"{HOST}/a", make_source(), [_Dead()]) is None
+
+
+def test_backend_order_comes_from_config(settings, fetcher):
+    from fpl_buddy.knowledge.backends import build_backends
+
+    settings.knowledge_fetch_backends = "httpx"
+    assert [b.name for b in build_backends(settings, fetcher)] == ["httpx"]
+
+
+def test_an_unknown_backend_name_is_ignored_not_fatal(settings, fetcher):
+    from fpl_buddy.knowledge.backends import build_backends
+
+    settings.knowledge_fetch_backends = "nonsense,httpx"
+    assert [b.name for b in build_backends(settings, fetcher)] == ["httpx"]
+
+
+def test_there_is_always_a_backend_even_if_config_names_none(settings, fetcher):
+    """Asserted by shape, not by exact list: whether scrapling is installed is a
+    property of the machine, and this must hold either way."""
+    from fpl_buddy.knowledge.backends import build_backends
+
+    settings.knowledge_fetch_backends = ""
+    names = [b.name for b in build_backends(settings, fetcher)]
+    assert names, "a harvest with no way to fetch anything is not a useful state"
+    assert names[-1] == "httpx", "the always-available backend stays last"
+
+
+# ------------------------------------------------- rendered-markdown handling
+
+
+def test_a_browser_interstitial_is_trimmed_off_rendered_markdown():
+    """A rendering backend sees consent walls and extension blocks that a plain
+    HTTP client never does, and they arrive ahead of the article."""
+    from fpl_buddy.knowledge.extract import from_markdown
+
+    markdown = (
+        "edigitalsurvey.com\n\n# edigitalsurvey.com is blocked\n\n"
+        "This page has been blocked by an extension\n\nERR_BLOCKED_BY_CLIENT\n\n"
+        "Reload\n\n" + "Newcastle beat Arsenal to the signing. " * 30
+    )
+    article = from_markdown(markdown, f"{HOST}/a", title="Real headline")
+
+    assert article is not None
+    assert "ERR_BLOCKED" not in article.text
+    assert "blocked by an extension" not in article.text
+    assert article.text.startswith("Newcastle beat Arsenal")
+
+
+def test_markdown_syntax_is_reduced_to_prose():
+    from fpl_buddy.knowledge.extract import from_markdown
+
+    markdown = (
+        "## Heading\n\n[Read more](https://example.test/x) and **bold** text. "
+        "![img](https://example.test/i.png)\n\n" + "Body sentence here. " * 30
+    )
+    article = from_markdown(markdown, f"{HOST}/a")
+
+    assert article is not None
+    assert "https://example.test" not in article.text, "link targets are noise"
+    assert "Read more" in article.text, "but their labels are content"
+    assert "**" not in article.text and "##" not in article.text
+
+
+def test_a_paywall_marker_in_rendered_markdown_is_still_caught():
+    from fpl_buddy.knowledge.extract import from_markdown
+
+    markdown = "Intro paragraph. " * 40 + "\n\nThis content is restricted to members."
+    article = from_markdown(markdown, f"{HOST}/a")
+    assert article is not None and article.access == "partial"
