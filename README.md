@@ -1,5 +1,7 @@
 # fpl-buddy
 
+[![CI](https://github.com/jishnuap/fpl-buddy/actions/workflows/ci.yml/badge.svg)](https://github.com/jishnuap/fpl-buddy/actions/workflows/ci.yml)
+
 A LangChain deep agent that manages a Fantasy Premier League team on a
 propose-then-commit loop: it drafts a plan well before the deadline, waits for a
 human, and — if nobody touches it — submits shortly before the deadline.
@@ -90,3 +92,16 @@ No network required — `tests/fixtures/` ships a trimmed `bootstrap-static`,
 Regenerate the fixtures with `python tests/fixtures/generate.py`.
 
 `make check` runs ruff and pytest; `make typecheck` runs mypy.
+
+## Contributing to this repo
+
+`main` is protected: changes go through a pull request and CI has to be green
+(ruff, mypy, pytest on 3.11/3.12/3.13, and a Docker image build). Force pushes
+and branch deletion are blocked, and history is kept linear — merge with squash
+or rebase.
+
+```bash
+git switch -c my-change
+make check
+gh pr create --fill
+```
