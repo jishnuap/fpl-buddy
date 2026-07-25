@@ -73,6 +73,30 @@ before any request that needs it. Two consequences:
 .venv/bin/fpl-buddy token       # expiry, and whether it can renew itself
 ```
 
+## What the agent sees
+
+The brief is built fresh each run from:
+
+| Source | Carries |
+|---|---|
+| `bootstrap-static` | Prices, availability, **Opta xG/xA/xGI/xGC per 90**, `starts_per_90` (rotation risk), **set-piece taker order**, FPL's own `ep_next`, defensive contribution, transfer momentum |
+| `my-team` | Your 15 with selling prices, bank, free transfers, chips |
+| `fixtures?future=1` | The fixture run over the next `FIXTURE_HORIZON_GAMEWEEKS` (default 5), not just the gameweek being submitted |
+| `team/set-piece-notes` | FPL's official set-piece notes, when published |
+| Solio Analytics | Projection leaderboards — treated as signal, never as the source of truth for ids or prices |
+
+There is no Understat or FBref scraper here on purpose: the FPL API already
+serves the Opta xG family, so the underlying numbers come from an endpoint that
+is already authorised and already being downloaded. See
+[decisions.md](docs/decisions.md).
+
+Two things the brief does deliberately, because getting them wrong cost real
+proposals: it renders unlimited free transfers as **"unlimited"** rather than the
+sentinel `15` (an agent told it has "15 free transfers" reads a finite budget and
+rolls), and it hands over a pre-computed **legal captain shortlist** drawn only
+from your squad — the projection leaderboards are league-wide, and prompt wording
+alone did not stop the agent captaining a player it did not own.
+
 ## Notifications
 
 `NOTIFY_CHANNEL=discord` posts each proposal as an embed with Approve / Amend /
@@ -106,7 +130,8 @@ scheduled proposal and then forgotten. A 📝 reaction confirms it was seen.
 src/fpl_buddy/
   config.py          pydantic-settings; every knob is env-driven
   fpl/               auth (login + cookie fallback), client, typed models
-  data/              Solio projections + the DecisionContext brief
+  data/              Solio projections + the DecisionContext brief (squad,
+                     underlying numbers, fixture horizon, captain shortlist)
   decisions/         schema, guardrails, store, executor
   agent/             Azure OpenAI + deepagents, prompts, read-only tools
   orchestrator.py    propose / approve / reject / amend / auto-commit

@@ -28,6 +28,10 @@ class DecisionContext:
     fixtures: list[Fixture]
     solio: SolioSnapshot | None
     solio_unmatched: list[str] = field(default_factory=list)
+    # Every unplayed fixture inside the configured horizon, not just this
+    # gameweek's -- a transfer is judged over a run.
+    horizon_fixtures: list[Fixture] = field(default_factory=list)
+    horizon_gameweeks: int = 1
     generated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     @property
@@ -38,9 +42,10 @@ class DecisionContext:
     # ------------------------------------------------------------------ render
     def squad_table(self) -> str:
         lines = [
-            "pos | player                    | club | £sell | £now | status | form | proj  | role"
+            "pos | player                    | club | £sell | £now | status | form "
+            "| xGI90 | st90 | setp | proj  | role"
         ]
-        lines.append("-" * 100)
+        lines.append("-" * 125)
         for pick in sorted(self.my_team.picks, key=lambda p: p.position):
             player = self.bootstrap.player(pick.element)
             if player is None:
@@ -62,15 +67,101 @@ class DecisionContext:
             lines.append(
                 f"{pick.position:>3} | {player.web_name:<25} | {club.short_name if club else '???':<4} "
                 f"| {pick.selling_price / 10:>5.1f} | {player.price:>4.1f} | {status:<6} "
-                f"| {player.form:>4.1f} | {proj:>5} | {role} [{player.position}, id={player.id}]"
+                f"| {player.form:>4.1f} | {player.expected_goal_involvements_per_90:>5.2f} "
+                f"| {player.starts_per_90:>4.2f} | {player.set_piece_duties or '-':<4} "
+                f"| {proj:>5} | {role} [{player.position}, id={player.id}]"
             )
+        lines.append(
+            "xGI90 = expected goal involvements per 90. st90 = starts per 90 "
+            "(minutes reliability). setp = set-piece order (P=pens, F=free kicks, C=corners)."
+        )
         return "\n".join(lines)
+
+    def fixture_run_lines(self, per_club: int = 4) -> list[str]:
+        """The next few fixtures for each club represented in the squad.
+
+        Without this the agent is asked to judge a transfer "over the next two
+        or three gameweeks" while only ever being shown one.
+        """
+        if not self.horizon_fixtures:
+            return []
+
+        club_ids = {
+            player.team
+            for pick in self.my_team.picks
+            if (player := self.bootstrap.player(pick.element)) is not None
+        }
+        rows = sorted(self.horizon_fixtures, key=lambda f: (f.event or 0, f.id))
+
+        def club_code(team_id: int) -> str:
+            team = self.bootstrap.team(team_id)
+            return team.short_name if team else ""
+
+        out: list[str] = []
+        for team_id in sorted(club_ids, key=club_code):
+            team = self.bootstrap.team(team_id)
+            if team is None:
+                continue
+            runs = []
+            for fixture in (f for f in rows if team_id in (f.team_h, f.team_a)):
+                home = fixture.team_h == team_id
+                other = self.bootstrap.team(fixture.team_a if home else fixture.team_h)
+                difficulty = (
+                    fixture.team_h_difficulty if home else fixture.team_a_difficulty
+                )
+                runs.append(
+                    f"GW{fixture.event} {other.short_name if other else '?'}"
+                    f"({'H' if home else 'A'},{difficulty})"
+                )
+                if len(runs) >= per_club:
+                    break
+            if runs:
+                out.append(f"  {team.short_name:<4} " + "  ".join(runs))
+        return out
 
     def _proj(self, element_id: int) -> str:
         if self.solio is None:
             return "-"
         row = self.solio.projection_for(element_id)
         return f"{row.pr_points:.2f}" if row and row.pr_points is not None else "-"
+
+    def captain_candidate_lines(self, limit: int = 8) -> list[str]:
+        """Squad-only armband options, best projection first.
+
+        This exists because the agent got it wrong in exactly the predictable
+        way: the Solio leaderboards below are league-wide and carry ``id=``
+        values, so the model captained the best player in the *league* rather
+        than the best player it *owns*, and the proposal died on validation.
+        Handing it a pre-filtered, legal shortlist removes the ambiguity.
+        """
+        rows: list[tuple[float, str]] = []
+        for pick in self.my_team.picks:
+            player = self.bootstrap.player(pick.element)
+            if player is None or player.position == "GKP":
+                continue
+            projection = self.projection_value(pick.element)
+            score = projection if projection is not None else (player.ep_next or 0.0)
+            club = self.bootstrap.team(player.team)
+            flags = " FLAGGED" if player.is_flagged else ""
+            bench = "" if pick.is_starter else " (currently benched)"
+            rows.append(
+                (
+                    score,
+                    f"  id={player.id:<4} {player.web_name:<20} "
+                    f"({club.short_name if club else '?'}, {player.position}) "
+                    f"proj {projection if projection is not None else '-'} "
+                    f"| ep_next {player.ep_next if player.ep_next is not None else '-'} "
+                    f"| setp {player.set_piece_duties or '-'}{flags}{bench}",
+                )
+            )
+        rows.sort(key=lambda r: -r[0])
+        return [line for _score, line in rows[:limit]]
+
+    def projection_value(self, element_id: int) -> float | None:
+        if self.solio is None:
+            return None
+        row = self.solio.projection_for(element_id)
+        return row.pr_points if row and row.pr_points is not None else None
 
     def news_lines(self) -> list[str]:
         out = []
@@ -98,7 +189,7 @@ class DecisionContext:
             f"({self.hours_to_deadline:.1f}h away)",
             f"Bank: £{self.my_team.bank_millions:.1f}m | "
             f"Squad value: £{self.my_team.total_budget / 10:.1f}m | "
-            f"Free transfers: {self.my_team.free_transfers}",
+            f"Free transfers: {self.my_team.free_transfers_text}",
             f"Chips available: {', '.join(self.my_team.chips_available) or 'none'}"
             + (f" | ACTIVE CHIP: {self.my_team.active_chip}" if self.my_team.active_chip else ""),
             "",
@@ -106,11 +197,41 @@ class DecisionContext:
             self.squad_table(),
         ]
 
+        if self.my_team.has_unlimited_transfers:
+            parts += [
+                "",
+                "## Transfers are free this gameweek",
+                "You have unlimited free transfers, so a transfer costs you nothing. Rolling is "
+                "NOT the default here: work through the squad and replace anyone a clearly better "
+                "option is available for within budget. Only leave a player alone because they "
+                "are genuinely the right pick, not to avoid spending a transfer.",
+            ]
+
+        candidates = self.captain_candidate_lines()
+        if candidates:
+            parts += [
+                "",
+                "## Legal captain / vice options (from YOUR squad only)",
+                "The captain and vice MUST be two different players from this list. Players in "
+                "the projection leaderboards further down are league-wide and mostly NOT yours.",
+                *candidates,
+            ]
+
         news = self.news_lines()
         if news:
             parts += ["", "## Injury / availability news on your players", *news]
 
         parts += ["", f"## Fixtures for {self.gameweek.name}", *self.fixture_lines()]
+
+        run = self.fixture_run_lines()
+        if run:
+            parts += [
+                "",
+                f"## Fixture run for your clubs (next {self.horizon_gameweeks} gameweeks)",
+                "Format: opponent(Home/Away, difficulty 1-5). Judge a transfer over the run, "
+                "not just this week.",
+                *run,
+            ]
 
         if self.solio is not None:
             parts += ["", self.solio.render()]
@@ -137,6 +258,19 @@ def build_context(settings: Settings, client: FPLClient | None = None) -> Decisi
     my_team = client.my_team()
     fixtures = client.fixtures(event=gameweek.id)
 
+    # The horizon is a nicety, not a requirement: if it fails, the run continues
+    # with this gameweek's fixtures alone rather than losing the gameweek.
+    horizon: list[Fixture] = []
+    last_gameweek = gameweek.id + settings.fixture_horizon_gameweeks - 1
+    try:
+        horizon = [
+            f
+            for f in client.fixtures(future=True)
+            if f.event is not None and gameweek.id <= f.event <= last_gameweek
+        ]
+    except Exception as exc:  # noqa: BLE001 - a missing horizon must not block the run
+        logger.warning("Could not load the fixture horizon (%s); using this gameweek only.", exc)
+
     solio: SolioSnapshot | None = None
     unmatched: list[str] = []
     try:
@@ -159,4 +293,6 @@ def build_context(settings: Settings, client: FPLClient | None = None) -> Decisi
         fixtures=fixtures,
         solio=solio,
         solio_unmatched=unmatched,
+        horizon_fixtures=horizon,
+        horizon_gameweeks=settings.fixture_horizon_gameweeks,
     )

@@ -12,11 +12,13 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from fpl_buddy.data.context import build_context
+from fpl_buddy.fpl.models import UNLIMITED_FREE_TRANSFERS
 
 from .conftest import (
     DEF_INJURED,
     FWD_CAPTAIN,
     GK_RESERVE,
+    MID_BENCH,
     MID_LIV,
     MID_VICE,
     NEXT_GAMEWEEK,
@@ -110,10 +112,119 @@ def test_render_warns_about_unmatched_projection_rows(context, solio):
 
 def test_projection_column_is_filled_in_when_solio_is_joined(context, solio):
     context.solio = solio
-    row = next(
-        line for line in context.squad_table().splitlines() if f"id={FWD_CAPTAIN}" in line
-    )
-    assert row.split("|")[7].strip() != "-", "the projection column should have a number"
+    lines = context.squad_table().splitlines()
+    # Located via the header rather than a hard-coded index, so adding a column
+    # can't quietly make this assert about a different one.
+    column = [c.strip() for c in lines[0].split("|")].index("proj")
+    row = next(line for line in lines if f"id={FWD_CAPTAIN}" in line)
+    assert row.split("|")[column].strip() != "-", "the projection column should have a number"
+
+
+def test_squad_table_carries_the_underlying_numbers(context):
+    lines = context.squad_table().splitlines()
+    header = [c.strip() for c in lines[0].split("|")]
+    row = next(line for line in lines if f"id={FWD_CAPTAIN}" in line).split("|")
+
+    assert row[header.index("xGI90")].strip() == "0.67"
+    assert row[header.index("st90")].strip() == "1.00"
+    assert row[header.index("setp")].strip() == "P1", "first-choice penalty taker"
+
+
+# ---------------------------------------------------------- captain candidates
+
+
+def test_captain_candidates_come_only_from_the_squad(context, solio):
+    """The failure this prevents: captaining the best player in the league
+    rather than the best player you own."""
+    context.solio = solio
+    squad_ids = {p.element for p in context.my_team.picks}
+
+    lines = context.captain_candidate_lines()
+    assert lines, "there should be candidates"
+    for line in lines:
+        element_id = int(line.split("id=")[1].split()[0])
+        assert element_id in squad_ids
+
+
+def test_captain_candidates_exclude_goalkeepers(context):
+    ids = {int(line.split("id=")[1].split()[0]) for line in context.captain_candidate_lines()}
+    assert GK_RESERVE not in ids
+    for element_id in ids:
+        assert context.bootstrap.player(element_id).position != "GKP"
+
+
+def test_captain_candidates_are_ranked_best_projection_first(context, solio):
+    context.solio = solio
+    scores = []
+    for line in context.captain_candidate_lines():
+        element_id = int(line.split("id=")[1].split()[0])
+        scores.append(context.projection_value(element_id) or 0.0)
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_captain_candidates_flag_the_unavailable_and_the_benched(context):
+    lines = context.captain_candidate_lines(limit=99)
+    injured = next(line for line in lines if f"id={DEF_INJURED}" in line)
+    assert "FLAGGED" in injured
+    benched = next(line for line in lines if f"id={MID_BENCH}" in line)
+    assert "benched" in benched
+
+
+def test_render_tells_the_agent_the_leaderboards_are_not_its_squad(context):
+    brief = context.render()
+    assert "Legal captain / vice options" in brief
+    assert "NOT yours" in brief
+
+
+# ------------------------------------------------------------- free transfers
+
+
+def test_unlimited_transfers_are_described_as_unlimited_not_as_fifteen(context):
+    """An agent told it has "15 free transfers" reads a finite budget and rolls."""
+    context.my_team.free_transfers = UNLIMITED_FREE_TRANSFERS
+    brief = context.render()
+
+    assert "Free transfers: unlimited" in brief
+    assert "Free transfers: 15" not in brief
+    assert "Transfers are free this gameweek" in brief
+    assert "Rolling is NOT the default" in brief
+
+
+def test_a_normal_week_says_nothing_about_free_transfers(context):
+    assert context.my_team.free_transfers == 1
+    brief = context.render()
+    assert "Free transfers: 1" in brief
+    assert "Transfers are free this gameweek" not in brief
+
+
+# ------------------------------------------------------------ fixture horizon
+
+
+def test_fixture_run_covers_more_than_the_current_gameweek(context):
+    lines = context.fixture_run_lines()
+    assert lines, "the horizon should produce a run per club"
+    assert any("GW5" in line for line in lines), "not just this gameweek"
+
+
+def test_fixture_run_only_covers_clubs_you_own(context):
+    owned = {
+        context.bootstrap.player(p.element).team for p in context.my_team.picks
+    }
+    owned_codes = {context.bootstrap.team(t).short_name for t in owned}
+    codes = {line.split()[0] for line in context.fixture_run_lines()}
+    assert codes == owned_codes
+
+
+def test_fixture_run_marks_home_away_and_difficulty(context):
+    line = context.fixture_run_lines()[0]
+    assert "(H," in line or "(A," in line
+
+
+def test_fixture_run_is_empty_without_a_horizon(context):
+    """The horizon is optional -- losing it must not break the brief."""
+    context.horizon_fixtures = []
+    assert context.fixture_run_lines() == []
+    assert "Fixture run" not in context.render()
 
 
 # ------------------------------------------------------------------- building
@@ -128,6 +239,29 @@ def test_build_context_assembles_everything(settings, fake_client, mock_solio):
     assert context.solio is not None
     assert context.solio_unmatched, "the fixture deliberately contains unmatchable rows"
     assert context.solio.projection_for(FWD_CAPTAIN) is not None
+    assert context.horizon_fixtures, "the multi-gameweek horizon should be loaded"
+
+
+def test_the_horizon_stops_at_the_configured_number_of_gameweeks(
+    settings, fake_client, mock_solio
+):
+    settings.fixture_horizon_gameweeks = 2
+    context = build_context(settings, fake_client)
+    # GW4 is next, so a 2-gameweek horizon is GW4 and GW5 -- never GW6.
+    assert {f.event for f in context.horizon_fixtures} == {4, 5}
+    assert context.horizon_gameweeks == 2
+
+
+def test_build_context_survives_the_horizon_failing(settings, fake_client, mock_solio):
+    """A missing horizon costs some reasoning quality, not the gameweek."""
+    import httpx
+
+    fake_client.future_fixtures_error = httpx.ConnectError("no route")
+    context = build_context(settings, fake_client)
+
+    assert context.horizon_fixtures == []
+    assert len(context.fixtures) == 3, "this gameweek still loaded"
+    assert "## Your squad" in context.render()
 
 
 def test_build_context_survives_solio_being_unreachable(settings, fake_client):

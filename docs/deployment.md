@@ -88,6 +88,7 @@ short version of what actually matters:
 | `API_KEY` | Set it once the service is on a public URL: read endpoints then require `X-API-Key`. |
 | `STATE_BACKEND`, `STATE_DIR` | `file` + a mounted volume, or `azure_table`. |
 | `NOTIFY_CHANNEL`, `WEBHOOK_URL` / `SMTP_*` / `DISCORD_BOT_TOKEN` + `DISCORD_CHANNEL_ID` | `discord` posts a proposal with Approve/Amend/Reject buttons; see [below](#discord). |
+| `FIXTURE_HORIZON_GAMEWEEKS` | How many gameweeks of fixtures the agent sees (default 5). One extra request per run; degrades to the current gameweek if it fails. |
 | `DRY_RUN` | Leave `true` until you have worked through [verify-payloads.md](verify-payloads.md). |
 
 Pass secrets as your platform's secret references, not as plaintext in a

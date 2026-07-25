@@ -72,6 +72,14 @@ class Settings(BaseSettings):
         default=0.0,
         description="Skip auto-commit if the agent's confidence is below this (0-1).",
     )
+    fixture_horizon_gameweeks: int = Field(
+        default=5,
+        ge=1,
+        description=(
+            "How many gameweeks of fixtures to show the agent. A transfer is "
+            "judged over a run of fixtures, not just the one being submitted."
+        ),
+    )
 
     # ------------------------------------------------------------ notification
     notify_channel: Literal["none", "smtp", "webhook", "log", "discord"] = "log"

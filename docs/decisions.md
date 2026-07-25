@@ -156,6 +156,47 @@ notes: the human note passed to `amend` is already explicit, immediate
 feedback, and mixing in whatever else was typed earlier the same day would
 make one amend's reasoning depend on unrelated, differently-timed input.
 
+**The FPL API is the xG source; there is no Understat scraper.** The obvious
+next move for better data looks like scraping Understat or FBref. It isn't
+needed: `bootstrap-static` ships 105 fields per player and already carries the
+Opta xG family (`expected_goals_per_90`, `expected_assists_per_90`,
+`expected_goal_involvements_per_90`, `expected_goals_conceded_per_90`), set-piece
+taker order, `starts_per_90`, and FPL's own `ep_next` projection. The payload was
+already being downloaded in full on every run while `models.py` declared 14 of
+those fields, so the highest-value data work was reading what had already
+arrived rather than adding a fragile HTML scraper for a worse version of it.
+Declaring a field costs one line and no requests; scraping costs a dependency, a
+ToS question, and a parser that breaks on redesign. Understat still has
+shot-level detail the FPL API lacks -- that is the only reason to revisit this.
+
+**The fixture horizon is a separate request, and optional.** `/fixtures/` with
+no arguments returns finished fixtures too, so the horizon uses `?future=1` and
+is filtered to `FIXTURE_HORIZON_GAMEWEEKS`. It is fetched in its own try/except
+and degrades to this gameweek alone, because a transfer judged on one fixture is
+worse than one judged on five, but no proposal at all is worse than both. Before
+this existed, `club_fixtures` answered "this gameweek only" while the scout
+prompt demanded reasoning "over the next two or three gameweeks" -- the prompt
+was asking for something the data could not support.
+
+**Unlimited free transfers are rendered as "unlimited", never as "15".**
+`transfers.limit` is `null` pre-season and on a wildcard, which the client maps
+to the sentinel `UNLIMITED_FREE_TRANSFERS = 15`. Putting that number straight
+into the brief was a real bug with real symptoms: the agent read "Free
+transfers: 15" as a large but finite budget, applied the standing "rolling is
+frequently correct" guidance, and proposed no transfers at all during pre-season
+when every transfer was free. The brief now says "unlimited" and adds an
+explicit section inverting the default, and the prompt branches on which
+situation you are in rather than always preferring the roll.
+
+**The brief hands the agent a pre-filtered captain shortlist.** Telling a model
+"the captain must be in your squad" is not sufficient, and the failure mode was
+consistent: the Solio leaderboards in the brief are league-wide and carry `id=`
+values, so the model captained the best player in the *league* -- Haaland, whom
+it did not own -- and every proposal died on `captain_not_in_squad`. Prompt
+wording alone did not fix it; a `## Legal captain / vice options` section
+computed from the squad did. Where a constraint can be enforced by only ever
+showing legal choices, do that instead of asking politely.
+
 ## Deliberately not done
 
 - **Multi-entry support.** One team, one entry id.
