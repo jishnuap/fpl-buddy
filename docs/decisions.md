@@ -20,8 +20,8 @@ squad.
 structured output come for free, and the graph is still a LangGraph graph if it
 ever needs surgery.
 
-**Azure Container Apps, one always-on replica.** The scheduler is in-process, so
-one replica is a correctness constraint, not a cost decision.
+**One always-on replica.** The scheduler is in-process, so a single instance is a
+correctness constraint, not a cost decision.
 
 **A local `.venv`.** No uv, no global pip.
 
@@ -74,6 +74,16 @@ read from your own `my-team` pick (it differs from `now_cost` under the
 suite starts failing the day the recorded deadline passes, and a test suite that
 rots is a test suite people stop trusting.
 
+**Ship an image, not infrastructure-as-code.** The repo had a Container Apps
+bicep template and a deploy script; both are gone. Deployment is manual, the
+artifact is a Docker Hub image, and [deployment.md](deployment.md) states the
+environment contract and the constraints any host has to satisfy. One less thing
+to keep in sync with a cloud provider's API version.
+
+**Publishing is triggered by a tag, not by a merge.** CI builds the image on
+every pull request to prove the Dockerfile works, and pushes nothing. `v*` tags
+and manual dispatch publish. An accidental merge cannot ship an image.
+
 ## Deliberately not done
 
 - **Multi-entry support.** One team, one entry id.
@@ -82,3 +92,23 @@ rots is a test suite people stop trusting.
   not a loop.
 - **Mini-league scraping / rank-aware strategy.** Interesting, and a whole
   project of its own.
+
+## The one change that would make idle hosting free
+
+The in-process scheduler is what forces an always-on instance, and that instance
+is ~98% of the hosting cost — it does about twenty minutes of real work a month.
+
+Moving to a platform scheduler would remove it: authenticated `/jobs/reanchor`,
+`/jobs/propose` and `/jobs/commit` endpoints, a daily cron hitting `reanchor`, and
+`reanchor` reading the live deadline and enqueueing the two precise runs with a
+delayed-task service (Cloud Tasks, or equivalent). Plain cron is not enough on its
+own: FPL deadlines move for international breaks and rescheduled fixtures, which
+is exactly why the scheduler ended up in-process to begin with.
+
+Two consequences to plan for if you do it:
+
+- `STATE_BACKEND=file` stops being viable — nothing on local disk survives, so the
+  store has to be a real database.
+- The on-disk cookie cache in `fpl/auth.py` becomes useless, so `FPL_COOKIE_HEADER`
+  becomes mandatory rather than a fallback. Login-based auth would re-login on
+  every cold start and get rate-limited.

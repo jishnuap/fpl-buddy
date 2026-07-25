@@ -36,16 +36,30 @@ cp .env.example .env            # then fill in FPL_ENTRY_ID and auth
 .venv/bin/python -m fpl_buddy.main
 ```
 
+## Running the container
+
+Published to Docker Hub on every `v*` tag, for `linux/amd64` and `linux/arm64`:
+
+```bash
+docker run -d --name fpl-buddy --restart unless-stopped \
+  -p 8080:8080 --env-file .env -v fpl-buddy-state:/data \
+  youruser/fpl-buddy:0.1.0
+```
+
+Deployment is manual and host-agnostic — there is no infrastructure-as-code here.
+[docs/deployment.md](docs/deployment.md) has the environment contract and the few
+rules any host has to satisfy (one instance, never scaled to zero, durable
+`STATE_DIR`).
+
 ## Authentication
 
 Two paths, tried in order:
 
 1. **Login** — `FPL_EMAIL` + `FPL_PASSWORD`. Works from a residential IP.
 2. **Pasted cookies** — `FPL_COOKIE_HEADER`. Premier League's bot protection
-   routinely returns `403` to datacenter IPs, which is exactly what a Container
-   App is, so **treat this as the likely production path.** Open
-   fantasy.premierleague.com, DevTools → Network → any `/api/me/` request →
-   Request Headers → copy the whole `cookie` value.
+   routinely returns `403` to datacenter IPs, so **treat this as the likely
+   production path.** Open fantasy.premierleague.com, DevTools → Network → any
+   `/api/me/` request → Request Headers → copy the whole `cookie` value.
 
 Cookies are cached under `STATE_DIR` so restarts don't re-login.
 
@@ -79,7 +93,10 @@ src/fpl_buddy/
   cli.py             typer entrypoints
 ```
 
-See [docs/](docs/) for deployment and the decision log.
+Docs: [deployment](docs/deployment.md) ·
+[day-to-day operations](docs/operations.md) ·
+[verifying the write payloads](docs/verify-payloads.md) ·
+[decision log](docs/decisions.md)
 
 ## Tests
 
