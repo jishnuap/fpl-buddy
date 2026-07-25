@@ -52,7 +52,9 @@ class SessionCookies:
 
     @property
     def is_complete(self) -> bool:
-        return all(self.cookies.get(name) for name in REQUIRED_COOKIES)
+        return bool(self.cookies.get("access_token")) or all(
+            self.cookies.get(name) for name in REQUIRED_COOKIES
+        )
 
     @property
     def is_stale(self) -> bool:
@@ -128,9 +130,9 @@ class FPLAuthenticator:
             raw = self.settings.fpl_cookie_header.get_secret_value()
             session = SessionCookies(cookies=parse_cookie_header(raw))
             if not session.is_complete:
-                missing = [c for c in REQUIRED_COOKIES if c not in session.cookies]
                 raise FPLAuthError(
-                    f"FPL_COOKIE_HEADER is missing required cookie(s): {', '.join(missing)}"
+                    "FPL_COOKIE_HEADER is missing required authentication tokens "
+                    "(must contain access_token or pl_profile + sessionid)"
                 )
             self.cache.save(session)
             return session
