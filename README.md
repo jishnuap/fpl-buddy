@@ -108,7 +108,8 @@ src/fpl_buddy/
   orchestrator.py    propose / approve / reject / amend / auto-commit
   api.py             FastAPI + signed one-click approval links
   scheduler.py       APScheduler, anchored to the real FPL deadline
-  notify.py          log / smtp / webhook
+  notify.py          log / smtp / webhook / discord channel selection + rendering
+  discord_bot/       gateway bot: embeds, Approve/Amend/Reject buttons, the async bridge
   cli.py             typer entrypoints
 ```
 
