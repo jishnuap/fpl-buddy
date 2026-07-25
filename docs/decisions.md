@@ -309,6 +309,16 @@ Timestamps are marked through the transcript roughly once a minute, so a claim
 can cite a point in the video and be checked against it -- the same provenance
 role the stored `Source extract` plays for articles.
 
+**A channel id comes from the page's canonical link, never from the first one
+that looks right.** The first `"channelId"` in a YouTube channel page belongs to
+something else -- a recommendation, or the owner of an embedded video. Matching
+it resolved `@LetsTalkFPL` to "Let's Talk Football", a different channel, and
+nothing downstream noticed: the feed parsed, transcripts fetched, notes stored,
+and the archive quietly filled with international-tournament reaction instead of
+FPL. The `<link rel="canonical">` id is the page stating its own address, with
+`externalId` as a second opinion. There is deliberately no fallback to a loose
+match, because a wrong-but-plausible id is exactly the failure that hides.
+
 **Robots exceptions are per source, written down, and off by default.** YouTube
 disallows both `/feeds/videos.xml` and `/api/` to crawlers, and the transcript
 library brings its own HTTP client that never passes through `fetch.py` at all.

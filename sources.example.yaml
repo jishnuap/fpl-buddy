@@ -97,7 +97,7 @@ sources:
   - name: lets-talk-fpl
     enabled: true
     kind: youtube
-    channel: "@LetsTalkFPL"
+    channel: "@LetsTalkFPL"   # resolves to UCxeOc7eFxq37yW_Nc-69deA
     ignore_robots: true
     discovery:
       # Titles are matched here, not URLs -- a watch URL is an opaque id, so the
@@ -109,6 +109,23 @@ sources:
     # The feed carries no duration, so length is judged from the transcript: a
     # short comes in under a couple of thousand characters, a multi-hour stream
     # far over the ceiling. A half-hour video is around 28,000.
+    min_transcript_chars: 1500
+    max_transcript_chars: 80000
+    tags: [video, tips]
+    trust: medium
+    ttl_days: 14
+    request_delay_seconds: 2.0
+
+  - name: fpl-harry
+    enabled: true
+    kind: youtube
+    channel: "@FPLHarry"      # resolves to UCcPWnCj5AKC19HaySZjb25g
+    ignore_robots: true
+    discovery:
+      exclude_patterns:
+        - '(?i)#shorts'
+        - '(?i)\blive\b'
+      max_articles_per_run: 2
     min_transcript_chars: 1500
     max_transcript_chars: 80000
     tags: [video, tips]

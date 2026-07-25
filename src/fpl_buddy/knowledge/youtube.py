@@ -34,7 +34,21 @@ logger = logging.getLogger(__name__)
 FEED_URL = "https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
 WATCH_URL = "https://www.youtube.com/watch?v={video_id}"
 
-_CHANNEL_ID_RE = re.compile(r'"channelId":"(UC[\w-]{20,})"')
+# Which id on a channel page belongs to *that* channel is not obvious, and
+# getting it wrong is silent: you harvest somebody else's uploads and everything
+# downstream looks perfectly healthy. The first `"channelId"` in the HTML is some
+# other channel entirely -- a recommendation, or the owner of an embedded video.
+# `@LetsTalkFPL` resolved that way to "Let's Talk Football", a different channel
+# whose videos are about international tournaments.
+#
+# The canonical link is the page stating its own address, with `externalId` as a
+# second opinion. Both agreed on both channels tested; neither agreed with the
+# naive match.
+_CHANNEL_ID_PATTERNS = (
+    re.compile(r'<link rel="canonical" href="https://www\.youtube\.com/channel/(UC[\w-]{20,})"'),
+    re.compile(r'"externalId":"(UC[\w-]{20,})"'),
+    re.compile(r'<meta itemprop="identifier" content="(UC[\w-]{20,})"'),
+)
 _VIDEO_ID_RE = re.compile(r"^[\w-]{11}$")
 
 # A timestamp marker roughly this often, so the summariser can cite a point in
@@ -83,12 +97,19 @@ def resolve_channel_id(channel: str, fetch_page) -> str | None:
     if not html:
         logger.warning("Could not load %s to resolve a channel id.", handle)
         return None
-    found = _CHANNEL_ID_RE.search(html)
-    if not found:
-        logger.warning("No channel id in the page at %s.", handle)
-        return None
-    logger.info("Resolved %s to channel %s.", value, found.group(1))
-    return found.group(1)
+    for pattern in _CHANNEL_ID_PATTERNS:
+        found = pattern.search(html)
+        if found:
+            logger.info("Resolved %s to channel %s.", value, found.group(1))
+            return found.group(1)
+
+    logger.warning(
+        "No canonical channel id in the page at %s. Not falling back to any "
+        "UC-looking id on the page: that is how you end up harvesting a "
+        "different channel without noticing.",
+        handle,
+    )
+    return None
 
 
 def feed_url(channel_id: str) -> str:

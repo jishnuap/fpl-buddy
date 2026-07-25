@@ -1151,10 +1151,34 @@ def test_channel_ids_resolve_from_every_accepted_form():
 
     def page(url):
         fetched.append(url)
-        return f'window.x = {{"channelId":"{uc}","other":1}};'
+        return f'<link rel="canonical" href="https://www.youtube.com/channel/{uc}">'
 
     assert resolve_channel_id("@SomeChannel", page) == uc
     assert fetched == ["https://www.youtube.com/@SomeChannel"]
+
+
+def test_the_channels_own_id_wins_over_any_other_on_the_page():
+    """The bug this pins: taking the first UC-looking id on a channel page
+    resolved @LetsTalkFPL to "Let's Talk Football", a different channel, and
+    every downstream step then looked perfectly healthy while harvesting
+    somebody else's uploads."""
+    from fpl_buddy.knowledge.youtube import resolve_channel_id
+
+    mine, someone_else = "UCxeOc7eFxq37yW_Nc-69deA", "UCHcvyjfCHf5D1RmVc216qWA"
+    page = (
+        f'{{"channelId":"{someone_else}","recommended":true}}'
+        f'<link rel="canonical" href="https://www.youtube.com/channel/{mine}">'
+        f'{{"externalId":"{mine}"}}'
+    )
+    assert resolve_channel_id("@Someone", lambda url: page) == mine
+
+
+def test_a_page_without_a_canonical_id_resolves_to_nothing():
+    """Guessing is what caused the bug above, so there is no fallback."""
+    from fpl_buddy.knowledge.youtube import resolve_channel_id
+
+    page = '{"channelId":"UCHcvyjfCHf5D1RmVc216qWA","recommended":true}'
+    assert resolve_channel_id("@Someone", lambda url: page) is None
 
 
 def test_an_unresolvable_channel_returns_nothing():
