@@ -79,6 +79,17 @@ is `AUTO_COMMIT_ENABLED=true`.
 **Solio returns 403.** Some networks and proxies block it. Projections are
 optional — the run continues and the brief says they were unavailable.
 
+**Discord button says "This interaction failed".** Either the container was
+mid-restart when you clicked (retry once it's back — buttons are stateless
+and survive a restart), or the bot's permissions in that channel are missing
+Send Messages / Embed Links. The embed's title is a link to the same review
+page the buttons act on, and works regardless.
+
+**Discord never posted anything.** `NOTIFY_CHANNEL=discord` needs both
+`DISCORD_BOT_TOKEN` and `DISCORD_CHANNEL_ID` — the container refuses to start
+without both once that channel is selected. Check the bot is actually in the
+server and can see the channel.
+
 ## Safety switches
 
 | Setting | Effect |

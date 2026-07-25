@@ -108,6 +108,40 @@ against it reported a healthy session that could not read the squad or submit
 anything. A pre-flight check that passes when the thing it protects is broken is
 worse than no check.
 
+**Discord buttons are dynamic, not view instances kept in memory.** A
+``discord.ui.View`` posted with a message normally stops working the moment
+the process that created it restarts -- the gateway library has no idea what
+that button was supposed to do anymore. ``discord.ui.DynamicItem`` sidesteps
+this by matching a regex against the button's ``custom_id`` (``fpl:approve:
+<proposal id>``) and reconstructing the item from that alone, so a button
+posted before a deploy still works after it. This is also why each action gets
+its own registered pattern rather than one shared one: a single generic regex
+would make every dynamic item class claim to match every other action's
+buttons.
+
+**Discord button callbacks run the orchestrator in a thread, never inline.**
+`Orchestrator.approve`/`amend` block on HTTP and, for amend, an LLM call --
+running that directly in a component callback would freeze the bot's entire
+event loop (every other interaction, heartbeats included) for as long as it
+takes. `asyncio.to_thread` is the fix; the component interaction is deferred
+first so Discord doesn't time out the 3-second ack while that runs.
+
+**Amending posts a new message; it does not edit the old one in place.**
+`Orchestrator.amend()` produces a genuinely new `Proposal` (new id, revision +
+1) and marks the old one `superseded` -- the Discord surface mirrors that
+rather than hiding it: the old message is edited to show it's superseded and
+loses its buttons, and the revision is a fresh message with its own. Editing
+the old message's content to *look like* the new proposal would hide that a
+new id now exists, which matters if you ever need to refer to it (`fpl-buddy
+show <id>`, the stored audit trail).
+
+**The bot lives inside the one existing process, not a second one.** The
+scheduler already requires exactly one always-on replica
+(see "One always-on replica" above); adding a separate bot process would be a
+second thing that could drift out of sync with it or double up, for no
+benefit -- the bot is started as a background asyncio task on the same event
+loop the API runs on.
+
 ## Deliberately not done
 
 - **Multi-entry support.** One team, one entry id.

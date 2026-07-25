@@ -11,6 +11,7 @@ has no scheduler, so nothing commits at the deadline. See ``docs/deployment.md``
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -18,7 +19,11 @@ import uvicorn
 
 from .api import create_app
 from .config import get_settings
+from .notify import build_notifier
+from .orchestrator import Orchestrator
 from .scheduler import FplScheduler
+
+logger = logging.getLogger(__name__)
 
 
 def configure_logging(level: str) -> None:
@@ -33,19 +38,49 @@ def configure_logging(level: str) -> None:
 
 def build_app():
     settings = get_settings()
-    scheduler = FplScheduler(settings)
+    bot = None
+    if settings.notify_channel == "discord":
+        if not settings.has_discord:
+            raise RuntimeError(
+                "NOTIFY_CHANNEL=discord needs both DISCORD_BOT_TOKEN and DISCORD_CHANNEL_ID."
+            )
+        from .discord_bot.bot import build_bot as _make_bot
+
+        # The bot's button callbacks need the orchestrator, and the
+        # orchestrator's notifier needs the bot to post through -- so the bot
+        # is built first without one, and given it once it exists.
+        bot = _make_bot(settings, orchestrator=None)
+        orchestrator = Orchestrator(settings, notifier=build_notifier(settings, discord_bot=bot))
+        bot.orchestrator = orchestrator
+    else:
+        orchestrator = Orchestrator(settings)
+
+    scheduler = FplScheduler(settings, orchestrator=orchestrator)
 
     @asynccontextmanager
     async def lifespan(app):
+        if bot is not None:
+            asyncio.create_task(bot.start(settings.discord_bot_token.get_secret_value()))
+            try:
+                await asyncio.wait_for(bot.wait_until_ready(), timeout=30)
+            except TimeoutError as exc:
+                raise RuntimeError(
+                    "Discord bot did not become ready within 30s -- check DISCORD_BOT_TOKEN."
+                ) from exc
+            logger.info("Discord bot connected; notifications will post to channel %s.",
+                        settings.discord_channel_id)
         scheduler.start()
         try:
             yield
         finally:
             scheduler.shutdown()
+            if bot is not None:
+                await bot.close()
 
-    app = create_app(settings, orchestrator=scheduler.orchestrator)
+    app = create_app(settings, orchestrator=orchestrator)
     app.router.lifespan_context = lifespan
     app.state.scheduler = scheduler
+    app.state.discord_bot = bot
     return app
 
 

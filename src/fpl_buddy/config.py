@@ -74,7 +74,7 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------ notification
-    notify_channel: Literal["none", "smtp", "webhook", "log"] = "log"
+    notify_channel: Literal["none", "smtp", "webhook", "log", "discord"] = "log"
     public_base_url: str = Field(
         default="http://localhost:8080",
         description="Public URL of this service; used to build approve/reject links.",
@@ -101,6 +101,12 @@ class Settings(BaseSettings):
     smtp_from: str = ""
     smtp_to: str = ""
     webhook_url: str = ""
+
+    # ---------------------------------------------------------------- discord
+    discord_bot_token: SecretStr = Field(default=SecretStr(""))
+    discord_channel_id: int = Field(
+        default=0, description="Channel the bot posts proposals and approval buttons to."
+    )
 
     # ------------------------------------------------------------------- data
     solio_url: str = "https://fpl.solioanalytics.com/api/data/latest.json"
@@ -150,6 +156,10 @@ class Settings(BaseSettings):
     @property
     def has_cookie_header(self) -> bool:
         return bool(self.fpl_cookie_header.get_secret_value())
+
+    @property
+    def has_discord(self) -> bool:
+        return bool(self.discord_bot_token.get_secret_value() and self.discord_channel_id)
 
 
 @lru_cache

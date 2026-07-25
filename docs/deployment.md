@@ -87,7 +87,7 @@ short version of what actually matters:
 | `PUBLIC_BASE_URL` | Externally reachable base URL, no trailing slash. |
 | `API_KEY` | Set it once the service is on a public URL: read endpoints then require `X-API-Key`. |
 | `STATE_BACKEND`, `STATE_DIR` | `file` + a mounted volume, or `azure_table`. |
-| `NOTIFY_CHANNEL`, `WEBHOOK_URL` / `SMTP_*` | `webhook` into ntfy/Telegram/Slack is the easiest thing that reaches a phone. |
+| `NOTIFY_CHANNEL`, `WEBHOOK_URL` / `SMTP_*` / `DISCORD_BOT_TOKEN` + `DISCORD_CHANNEL_ID` | `discord` posts a proposal with Approve/Amend/Reject buttons; see [below](#discord). |
 | `DRY_RUN` | Leave `true` until you have worked through [verify-payloads.md](verify-payloads.md). |
 
 Pass secrets as your platform's secret references, not as plaintext in a
@@ -136,6 +136,30 @@ docker exec fpl-buddy fpl-buddy verify
 `verify` probes `/my-team/`, not `/me/` — `/me/` answers `200` for a session with
 no usable access token at all, so it will happily tell you everything is fine
 while the squad is unreadable.
+
+## Discord
+
+Set `NOTIFY_CHANNEL=discord` to get proposals as an embed with Approve / Amend /
+Reject buttons, instead of (or alongside a separate) email or webhook. The
+buttons call the exact same `Orchestrator` methods the web approval link and
+the CLI do -- there is no separate Discord-only decision path.
+
+1. [discord.com/developers/applications](https://discord.com/developers/applications) →
+   **New Application** → **Bot** → **Reset Token** → copy it into
+   `DISCORD_BOT_TOKEN`. No privileged intents are needed for buttons and
+   modals; leave `MESSAGE CONTENT INTENT` off.
+2. **OAuth2 → URL Generator** → scope `bot` → permissions **Send Messages**,
+   **Embed Links**, **Read Message History** → open the generated URL and add
+   the bot to your server.
+3. In Discord, enable **Developer Mode** (User Settings → Advanced), right
+   click the channel you want proposals in → **Copy Channel ID** → set
+   `DISCORD_CHANNEL_ID`.
+
+The bot is a persistent gateway connection living inside this same process
+(same "one always-on replica" constraint as the scheduler -- see
+[decisions.md](decisions.md)), not a second thing to deploy. If the container
+restarts mid-approval-window, old buttons keep working: they're matched by a
+pattern on the message's `custom_id`, not by anything held in memory.
 
 ## First gameweek
 
