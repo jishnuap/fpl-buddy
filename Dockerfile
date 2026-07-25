@@ -24,8 +24,13 @@ ENV PYTHONUNBUFFERED=1 \
 RUN useradd --create-home --uid 10001 app \
     && mkdir -p /data && chown app:app /data
 
-COPY --from=build /build/dist/*.whl /tmp/
-RUN pip install /tmp/*.whl[azure] && rm -f /tmp/*.whl
+COPY --from=build /build/dist/*.whl /tmp/dist/
+# Resolve the wheel filename first: `/tmp/dist/*.whl[azure]` looks like a glob
+# with a character class, so the shell matches nothing and pip gets the literal
+# pattern. Extras have to be appended to an already-expanded path.
+RUN wheel="$(ls /tmp/dist/*.whl)" \
+    && pip install "${wheel}[azure]" \
+    && rm -rf /tmp/dist
 
 USER app
 WORKDIR /home/app
