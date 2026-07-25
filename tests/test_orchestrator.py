@@ -15,6 +15,7 @@ import pytest
 from fpl_buddy.decisions.executor import ExecutionBlocked
 from fpl_buddy.decisions.schema import ProposalStatus
 from fpl_buddy.decisions.store import FileProposalStore
+from fpl_buddy.notes import FileNoteStore
 from fpl_buddy.notify import Notifier
 from fpl_buddy.orchestrator import NotActionable, Orchestrator, ProposalNotFound
 
@@ -46,12 +47,18 @@ def store(tmp_path: Path) -> FileProposalStore:
 
 
 @pytest.fixture
-def orch(settings, store, fake_client, notifier, mock_solio) -> Orchestrator:
+def notes_store(tmp_path: Path) -> FileNoteStore:
+    return FileNoteStore(tmp_path / "notes.json")
+
+
+@pytest.fixture
+def orch(settings, store, notes_store, fake_client, notifier, mock_solio) -> Orchestrator:
     return Orchestrator(
         settings,
         store=store,
         client=fake_client,
         notifier=notifier,
+        notes=notes_store,
         model=FakeStructuredModel(),
     )
 
@@ -125,6 +132,36 @@ def test_a_dead_notifier_does_not_lose_the_proposal(
     proposal = orch.propose()
     assert store.get(proposal.id) is not None
     assert proposal.status == ProposalStatus.PENDING
+
+
+# ----------------------------------------------------------------------- notes
+
+
+def test_pending_notes_reach_the_agent_prompt(orch, notes_store):
+    notes_store.add("jishnu", "bench Vasquez, he's got a knock")
+    model = orch._model
+
+    orch.propose()
+
+    assert any("bench Vasquez, he's got a knock" in prompt for prompt in model.seen_prompts)
+
+
+def test_notes_are_consumed_once_folded_in(orch, notes_store):
+    notes_store.add("jishnu", "roll the transfer")
+    orch.propose()
+    assert notes_store.pending() == []
+
+
+def test_a_note_left_after_proposing_waits_for_the_next_run(orch, notes_store):
+    orch.propose()
+    notes_store.add("jishnu", "captain Oakley next time")
+    assert len(notes_store.pending()) == 1
+
+
+def test_propose_without_any_notes_does_not_mention_them(orch):
+    model = orch._model
+    orch.propose()
+    assert "left these notes" not in model.seen_prompts[0]
 
 
 # --------------------------------------------------------------------- approve

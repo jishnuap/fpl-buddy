@@ -144,22 +144,35 @@ Reject buttons, instead of (or alongside a separate) email or webhook. The
 buttons call the exact same `Orchestrator` methods the web approval link and
 the CLI do -- there is no separate Discord-only decision path.
 
+The bot also reads (but never replies to) ordinary messages in that same
+channel: anything you type there during the day is saved as a note and folded
+into the next scheduled proposal's brief, then marked used so it doesn't repeat
+into the following gameweek. There is no back-and-forth chat -- just somewhere
+to drop a thought ("bench Vasquez, he's got a knock") whenever it occurs to
+you. A 📝 reaction on your message confirms it was captured.
+
 1. [discord.com/developers/applications](https://discord.com/developers/applications) →
    **New Application** → **Bot** → **Reset Token** → copy it into
-   `DISCORD_BOT_TOKEN`. No privileged intents are needed for buttons and
-   modals; leave `MESSAGE CONTENT INTENT` off.
-2. **OAuth2 → URL Generator** → scope `bot` → permissions **Send Messages**,
-   **Embed Links**, **Read Message History** → open the generated URL and add
-   the bot to your server.
-3. In Discord, enable **Developer Mode** (User Settings → Advanced), right
-   click the channel you want proposals in → **Copy Channel ID** → set
-   `DISCORD_CHANNEL_ID`.
+   `DISCORD_BOT_TOKEN`.
+2. Same page, **Bot** tab → **Privileged Gateway Intents** → turn on
+   **MESSAGE CONTENT INTENT** and save. This is what lets the bot read the
+   notes you type -- without it, the bot fails to connect at all (buttons and
+   modals alone don't need it, but the notes feature does).
+3. **OAuth2 → URL Generator** → scope `bot` → permissions **Send Messages**,
+   **Embed Links**, **Read Message History**, **Add Reactions** → open the
+   generated URL and add the bot to your server.
+4. In Discord, enable **Developer Mode** (User Settings → Advanced), right
+   click the channel you want proposals (and notes) in → **Copy Channel ID** →
+   set `DISCORD_CHANNEL_ID`.
 
 The bot is a persistent gateway connection living inside this same process
 (same "one always-on replica" constraint as the scheduler -- see
 [decisions.md](decisions.md)), not a second thing to deploy. If the container
 restarts mid-approval-window, old buttons keep working: they're matched by a
-pattern on the message's `custom_id`, not by anything held in memory.
+pattern on the message's `custom_id`, not by anything held in memory. Notes
+survive a restart too, for the same reason proposals do -- see `STATE_BACKEND`
+above; a note captured just before a redeploy would otherwise silently never
+reach the agent.
 
 ## First gameweek
 

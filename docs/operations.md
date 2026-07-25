@@ -90,6 +90,14 @@ page the buttons act on, and works regardless.
 without both once that channel is selected. Check the bot is actually in the
 server and can see the channel.
 
+**A note you typed in Discord never showed up in the next proposal.** Most
+likely `MESSAGE CONTENT INTENT` isn't turned on for the bot (Developer Portal →
+Bot tab) — without it the bot can't read message text at all, and would have
+failed to connect entirely rather than silently missing messages, so check the
+logs for a `PrivilegedIntentsRequired` error first. If it connected fine, check
+you typed in the exact channel `DISCORD_CHANNEL_ID` points to; other channels
+are ignored. A message with no reaction from the bot was never captured.
+
 ## Safety switches
 
 | Setting | Effect |

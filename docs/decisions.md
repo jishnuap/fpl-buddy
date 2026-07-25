@@ -142,6 +142,20 @@ second thing that could drift out of sync with it or double up, for no
 benefit -- the bot is started as a background asyncio task on the same event
 loop the API runs on.
 
+**Notes are captured passively and folded in once, not chatted with.** The
+explicit product decision here is no back-and-forth conversation with the
+agent -- `on_message` files every message in the configured channel away as a
+`Note` and never replies. The only place a note is ever read is the next
+`Orchestrator.propose()` run, which folds everything pending into the brief as
+one more input (alongside the squad, fixtures, and projections) and then marks
+those notes consumed. This keeps the mental model simple: one proposal per
+gameweek, built from one brief, and a note dropped mid-week either makes it
+into that brief or it doesn't -- it never lingers to be replayed into a later
+gameweek by accident. `amend()` deliberately does not also pull in pending
+notes: the human note passed to `amend` is already explicit, immediate
+feedback, and mixing in whatever else was typed earlier the same day would
+make one amend's reasoning depend on unrelated, differently-timed input.
+
 ## Deliberately not done
 
 - **Multi-entry support.** One team, one entry id.
