@@ -1,0 +1,427 @@
+"""FPL auth and HTTP client, fully mocked with respx.
+
+The write payload tests are the ones that matter most: they pin the exact JSON
+shape and headers that will one day be sent for real. If FPL changes its API, or
+someone "tidies" a field name, these fail before your points do.
+
+They are not a substitute for diffing against a real browser capture -- see
+docs/verify-payloads.md.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+from pathlib import Path
+
+import httpx
+import pytest
+import respx
+
+from fpl_buddy.fpl.auth import (
+    COOKIE_MAX_AGE_SECONDS,
+    CookieCache,
+    FPLAuthenticator,
+    FPLAuthError,
+    SessionCookies,
+    parse_cookie_header,
+)
+from fpl_buddy.fpl.client import (
+    UNLIMITED_FREE_TRANSFERS,
+    FPLApiError,
+    FPLClient,
+    TransferRejected,
+    parse_my_team,
+)
+
+from .conftest import FREE_MID_NEW, FWD_CAPTAIN, MID_LIV, MID_VICE, load_json
+
+API = "https://fantasy.premierleague.com/api"
+LOGIN = "https://users.premierleague.com/accounts/login/"
+COOKIE = "pl_profile=eyJhIjoxfQ; sessionid=abc123; other=keepme"
+
+
+@pytest.fixture
+def authed_settings(settings):
+    settings.fpl_cookie_header = _secret(COOKIE)
+    settings.fpl_entry_id = 999999
+    return settings
+
+
+def _secret(value: str):
+    from pydantic import SecretStr
+
+    return SecretStr(value)
+
+
+# ------------------------------------------------------------------ cookie plumbing
+
+
+def test_cookie_header_is_parsed_into_pairs():
+    cookies = parse_cookie_header("a=1; b=2;  c=three=with=equals ; ; junk")
+    assert cookies == {"a": "1", "b": "2", "c": "three=with=equals"}
+
+
+def test_session_is_complete_only_with_both_required_cookies():
+    assert SessionCookies(cookies={"pl_profile": "x", "sessionid": "y"}).is_complete
+    assert not SessionCookies(cookies={"sessionid": "y"}).is_complete
+    assert not SessionCookies(cookies={"pl_profile": "x", "sessionid": ""}).is_complete
+
+
+def test_session_header_round_trips_every_cookie():
+    session = SessionCookies(cookies=parse_cookie_header(COOKIE))
+    assert session.as_header() == COOKIE
+    assert "other=keepme" in session.as_header(), "unrelated cookies must be preserved"
+
+
+def test_session_goes_stale():
+    fresh = SessionCookies(cookies={"pl_profile": "x", "sessionid": "y"})
+    old = SessionCookies(
+        cookies={"pl_profile": "x", "sessionid": "y"},
+        obtained_at=time.time() - COOKIE_MAX_AGE_SECONDS - 1,
+    )
+    assert not fresh.is_stale
+    assert old.is_stale
+
+
+def test_cookie_cache_round_trip(tmp_path: Path):
+    cache = CookieCache(tmp_path / "nested" / "cookies.json")
+    assert cache.load() is None
+
+    session = SessionCookies(cookies={"pl_profile": "x", "sessionid": "y"})
+    cache.save(session)
+    loaded = cache.load()
+    assert loaded is not None and loaded.cookies == session.cookies
+    assert cache.path.stat().st_mode & 0o777 == 0o600, "cookies are a credential"
+
+    cache.clear()
+    assert cache.load() is None
+
+
+def test_corrupt_cookie_cache_is_ignored(tmp_path: Path):
+    path = tmp_path / "cookies.json"
+    path.write_text("{not json")
+    assert CookieCache(path).load() is None
+
+
+# ------------------------------------------------------------------------- auth
+
+
+def test_pasted_cookie_header_is_used_and_cached(authed_settings):
+    auth = FPLAuthenticator(authed_settings)
+    session = auth.get_session_cookies()
+    assert session.cookies["sessionid"] == "abc123"
+    assert auth.cache.load() is not None
+
+
+def test_incomplete_cookie_header_is_rejected_loudly(settings):
+    settings.fpl_cookie_header = _secret("sessionid=abc123")
+    with pytest.raises(FPLAuthError, match="pl_profile"):
+        FPLAuthenticator(settings).get_session_cookies()
+
+
+def test_no_credentials_at_all_is_an_error(settings):
+    with pytest.raises(FPLAuthError, match="No FPL credentials"):
+        FPLAuthenticator(settings).get_session_cookies()
+
+
+@respx.mock
+def test_login_reads_cookies_from_the_302_without_following_it(settings):
+    settings.fpl_email = "me@example.test"
+    settings.fpl_password = _secret("hunter2")
+
+    route = respx.post(LOGIN).mock(
+        return_value=httpx.Response(
+            302,
+            headers=[
+                ("set-cookie", "pl_profile=profile-value; Path=/"),
+                ("set-cookie", "sessionid=session-value; Path=/"),
+                ("location", "https://fantasy.premierleague.com/a/login"),
+            ],
+        )
+    )
+
+    session = FPLAuthenticator(settings).get_session_cookies()
+    assert session.cookies["pl_profile"] == "profile-value"
+    assert session.cookies["sessionid"] == "session-value"
+    assert route.call_count == 1, "following the redirect would lose the cookies"
+
+    request = route.calls[0].request
+    body = request.content.decode()
+    assert "app=plfpl-web" in body
+    assert "redirect_uri=https%3A%2F%2Ffantasy.premierleague.com%2Fa%2Flogin" in body
+
+
+@respx.mock
+def test_login_403_says_it_is_the_bot_protection(settings):
+    settings.fpl_email = "me@example.test"
+    settings.fpl_password = _secret("hunter2")
+    respx.post(LOGIN).mock(return_value=httpx.Response(403, text="denied"))
+
+    with pytest.raises(FPLAuthError, match="FPL_COOKIE_HEADER"):
+        FPLAuthenticator(settings).get_session_cookies()
+
+
+@respx.mock
+def test_login_without_cookies_hints_at_bad_credentials(settings):
+    settings.fpl_email = "me@example.test"
+    settings.fpl_password = _secret("wrong")
+    respx.post(LOGIN).mock(
+        return_value=httpx.Response(
+            302, headers=[("location", "https://fantasy.premierleague.com/?state=fail")]
+        )
+    )
+    with pytest.raises(FPLAuthError, match="bad credentials"):
+        FPLAuthenticator(settings).get_session_cookies()
+
+
+# ------------------------------------------------------------------------ reads
+
+
+@respx.mock
+def test_bootstrap_is_parsed_and_cached(authed_settings):
+    route = respx.get(f"{API}/bootstrap-static/").mock(
+        return_value=httpx.Response(200, json=load_json("bootstrap-static.json"))
+    )
+    client = FPLClient(authed_settings)
+
+    boot = client.bootstrap()
+    assert boot.player(FWD_CAPTAIN).web_name == "Vasquez"
+    assert boot.next_gameweek.id == 4
+
+    client.bootstrap()
+    assert route.call_count == 1, "second call should hit the cache"
+    client.bootstrap(refresh=True)
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_fixtures_pass_the_event_filter(authed_settings):
+    route = respx.get(f"{API}/fixtures/").mock(
+        return_value=httpx.Response(200, json=load_json("fixtures.json"))
+    )
+    fixtures = FPLClient(authed_settings).fixtures(event=4)
+    assert len(fixtures) == 3
+    assert route.calls[0].request.url.params["event"] == "4"
+
+
+@respx.mock
+def test_my_team_sends_the_cookie_header(authed_settings):
+    route = respx.get(f"{API}/my-team/999999/").mock(
+        return_value=httpx.Response(200, json=load_json("my-team.json"))
+    )
+    my_team = FPLClient(authed_settings).my_team()
+
+    assert len(my_team.picks) == 15
+    assert my_team.bank == 15
+    assert my_team.free_transfers == 1
+    assert my_team.captain_id == FWD_CAPTAIN
+    assert my_team.vice_captain_id == MID_VICE
+    assert set(my_team.chips_available) == {"wildcard", "3xc"}
+    assert my_team.active_chip is None
+
+    headers = route.calls[0].request.headers
+    assert "sessionid=abc123" in headers["cookie"]
+    assert headers["x-requested-with"] == "XMLHttpRequest"
+
+
+def test_my_team_without_an_entry_id_is_an_error(settings):
+    settings.fpl_entry_id = 0
+    with pytest.raises(FPLApiError, match="FPL_ENTRY_ID"):
+        FPLClient(settings).my_team()
+
+
+def test_unlimited_transfers_are_not_a_phantom_hit():
+    """`transfers.limit` is None on a wildcard or pre-season, not 0."""
+    raw = load_json("my-team.json")
+    raw["transfers"]["limit"] = None
+    assert parse_my_team(raw).free_transfers == UNLIMITED_FREE_TRANSFERS
+
+
+def test_missing_transfer_block_defaults_safely():
+    raw = load_json("my-team.json")
+    raw.pop("transfers")
+    parsed = parse_my_team(raw)
+    assert parsed.bank == 0
+    assert parsed.free_transfers == UNLIMITED_FREE_TRANSFERS
+
+
+def test_active_chip_is_detected():
+    raw = load_json("my-team.json")
+    raw["chips"][0]["status_for_entry"] = "active"
+    assert parse_my_team(raw).active_chip == "wildcard"
+
+
+@respx.mock
+def test_expired_session_is_refreshed_once_then_retried(authed_settings):
+    route = respx.get(f"{API}/my-team/999999/").mock(
+        side_effect=[
+            httpx.Response(401, text="unauthorised"),
+            httpx.Response(200, json=load_json("my-team.json")),
+        ]
+    )
+    my_team = FPLClient(authed_settings).my_team()
+    assert len(my_team.picks) == 15
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_persistent_401_surfaces_as_an_error(authed_settings):
+    respx.get(f"{API}/my-team/999999/").mock(return_value=httpx.Response(401, text="nope"))
+    with pytest.raises(FPLApiError) as excinfo:
+        FPLClient(authed_settings).my_team()
+    assert excinfo.value.status_code == 401
+
+
+@respx.mock
+def test_transport_errors_are_retried(authed_settings):
+    route = respx.get(f"{API}/bootstrap-static/").mock(
+        side_effect=[
+            httpx.ConnectError("boom"),
+            httpx.Response(200, json=load_json("bootstrap-static.json")),
+        ]
+    )
+    assert FPLClient(authed_settings).bootstrap().next_gameweek.id == 4
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_verify_session_reports_health(authed_settings):
+    respx.get(f"{API}/me/").mock(return_value=httpx.Response(200, json={"player": {}}))
+    assert FPLClient(authed_settings).verify_session() is True
+
+
+@respx.mock
+def test_verify_session_is_false_when_rejected(authed_settings):
+    respx.get(f"{API}/me/").mock(return_value=httpx.Response(403, text="no"))
+    assert FPLClient(authed_settings).verify_session() is False
+
+
+# ----------------------------------------------------------------------- writes
+
+
+TRANSFER = {
+    "element_in": FREE_MID_NEW,
+    "element_out": MID_LIV,
+    "purchase_price": 50,
+    "selling_price": 52,
+}
+
+
+@respx.mock
+def test_dry_run_sends_nothing_at_all(authed_settings):
+    assert authed_settings.dry_run is True
+    route = respx.post(f"{API}/transfers/")
+    picks_route = respx.post(f"{API}/my-team/999999/")
+
+    client = FPLClient(authed_settings)
+    result = client.submit_transfers(transfers=[TRANSFER], event=4)
+    picks = client.submit_picks(picks=[{"element": 1, "position": 1}])
+
+    assert result["dry_run"] is True
+    assert result["payload"]["transfers"] == [TRANSFER]
+    assert picks["dry_run"] is True
+    assert route.call_count == 0 and picks_route.call_count == 0
+
+
+@respx.mock
+def test_transfer_payload_and_headers_are_exact(authed_settings):
+    authed_settings.dry_run = False
+    route = respx.post(f"{API}/transfers/").mock(return_value=httpx.Response(200, json={}))
+
+    FPLClient(authed_settings).submit_transfers(transfers=[TRANSFER], event=4)
+
+    request = route.calls[0].request
+    payload = json.loads(request.content)
+    assert payload == {
+        "confirmed": True,
+        "entry": 999999,
+        "event": 4,
+        "transfers": [TRANSFER],
+        "chip": None,
+        "freehit": False,
+        "wildcard": False,
+    }
+    assert request.headers["content-type"] == "application/json"
+    assert request.headers["x-requested-with"] == "XMLHttpRequest"
+    assert request.headers["origin"] == "https://fantasy.premierleague.com"
+    assert request.headers["referer"] == "https://fantasy.premierleague.com/transfers"
+    assert "sessionid=abc123" in request.headers["cookie"]
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("chip", "freehit", "wildcard"),
+    [(None, False, False), ("wildcard", False, True), ("freehit", True, False)],
+)
+def test_chip_flags_track_the_chip(authed_settings, chip, freehit, wildcard):
+    authed_settings.dry_run = False
+    route = respx.post(f"{API}/transfers/").mock(return_value=httpx.Response(200, json={}))
+
+    FPLClient(authed_settings).submit_transfers(transfers=[TRANSFER], event=4, chip=chip)
+
+    payload = json.loads(route.calls[0].request.content)
+    assert (payload["chip"], payload["freehit"], payload["wildcard"]) == (chip, freehit, wildcard)
+
+
+@respx.mock
+def test_picks_payload_and_referer_are_exact(authed_settings):
+    authed_settings.dry_run = False
+    route = respx.post(f"{API}/my-team/999999/").mock(return_value=httpx.Response(200, json={}))
+
+    picks = [
+        {"element": 100 + i, "position": i + 1, "is_captain": i == 0, "is_vice_captain": i == 1}
+        for i in range(15)
+    ]
+    FPLClient(authed_settings).submit_picks(picks=picks, chip="3xc")
+
+    request = route.calls[0].request
+    payload = json.loads(request.content)
+    assert payload == {"picks": picks, "chip": "3xc"}
+    assert len(payload["picks"]) == 15
+    assert request.headers["referer"] == "https://fantasy.premierleague.com/my-team"
+
+
+@respx.mock
+def test_a_rejected_write_raises_with_the_reason(authed_settings):
+    authed_settings.dry_run = False
+    respx.post(f"{API}/transfers/").mock(
+        return_value=httpx.Response(400, json={"non_form_errors": ["Not enough money"]})
+    )
+    with pytest.raises(TransferRejected, match="Not enough money"):
+        FPLClient(authed_settings).submit_transfers(transfers=[TRANSFER], event=4)
+
+
+@respx.mock
+def test_a_redirected_write_is_a_failure_not_a_silent_success(authed_settings):
+    """A 302 on a write means we got bounced to login and nothing was submitted.
+
+    The body is empty, so anything that treats 3xx as success records a
+    submission that never happened -- the worst outcome available.
+    """
+    authed_settings.dry_run = False
+    respx.post(f"{API}/transfers/").mock(
+        return_value=httpx.Response(302, headers={"location": "https://example.test/login"})
+    )
+    with pytest.raises(TransferRejected, match="session is probably dead"):
+        FPLClient(authed_settings).submit_transfers(transfers=[TRANSFER], event=4)
+
+
+@respx.mock
+def test_a_redirected_read_is_a_failure_too(authed_settings):
+    respx.get(f"{API}/bootstrap-static/").mock(
+        return_value=httpx.Response(302, headers={"location": "https://example.test/login"})
+    )
+    with pytest.raises(FPLApiError):
+        FPLClient(authed_settings).bootstrap()
+
+
+@respx.mock
+def test_write_retries_once_after_refreshing_a_dead_session(authed_settings):
+    authed_settings.dry_run = False
+    route = respx.post(f"{API}/transfers/").mock(
+        side_effect=[httpx.Response(403, text="expired"), httpx.Response(200, json={"ok": 1})]
+    )
+    result = FPLClient(authed_settings).submit_transfers(transfers=[TRANSFER], event=4)
+    assert result == {"ok": 1}
+    assert route.call_count == 2

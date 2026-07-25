@@ -1,0 +1,27 @@
+# Secrets and local state -- never commit these.
+.env
+.env.*
+!.env.example
+.state/
+*.cookies.json
+
+# Environment
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

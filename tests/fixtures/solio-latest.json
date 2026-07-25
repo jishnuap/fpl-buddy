@@ -1,0 +1,522 @@
+{
+  "generatedAt": "2025-09-12T06:00:00.000Z",
+  "gameweek": 4,
+  "deadlineIso": "2025-09-13T10:00:00Z",
+  "source": "solio-analytics",
+  "topProjected": [
+    {
+      "name": "Vasquez",
+      "team": "MCI",
+      "position": "FWD",
+      "price": 145,
+      "ownership": 71.4,
+      "prPoints": 7.9,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 15.01,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    },
+    {
+      "name": "Kelsall",
+      "team": "LIV",
+      "position": "MID",
+      "price": 70,
+      "ownership": 12.5,
+      "prPoints": 5.15,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 9.79,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    },
+    {
+      "name": "Abbott",
+      "team": "NEW",
+      "position": "MID",
+      "price": 50,
+      "ownership": 20.0,
+      "prPoints": 6.05,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 11.49,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    },
+    {
+      "name": "Abbott",
+      "team": "ARS",
+      "position": "GKP",
+      "price": 45,
+      "ownership": 20.0,
+      "prPoints": 5.75,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 10.92,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    },
+    {
+      "name": "Kelsal",
+      "team": "TOT",
+      "position": "MID",
+      "price": 70,
+      "ownership": 12.5,
+      "prPoints": 5.15,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 9.79,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    },
+    {
+      "name": "Zoltan Nevermatch",
+      "team": "ARS",
+      "position": "MID",
+      "price": 70,
+      "ownership": 12.5,
+      "prPoints": 5.15,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 9.79,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    },
+    {
+      "name": "Kelsall",
+      "team": "XYZ",
+      "position": "MID",
+      "price": 70,
+      "ownership": 12.5,
+      "prPoints": 5.15,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 9.79,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    }
+  ],
+  "topCaptains": [
+    {
+      "name": "Vasquez",
+      "team": "MCI",
+      "position": "FWD",
+      "price": 145,
+      "ownership": 71.4,
+      "prPoints": 7.9,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 15.01,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    },
+    {
+      "name": "Kelsall",
+      "team": "LIV",
+      "position": "MID",
+      "price": 70,
+      "ownership": 12.5,
+      "prPoints": 5.15,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 9.79,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    },
+    {
+      "name": "Abbott",
+      "team": "NEW",
+      "position": "MID",
+      "price": 50,
+      "ownership": 20.0,
+      "prPoints": 6.05,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 11.49,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    }
+  ],
+  "topDifferentials": [
+    {
+      "name": "Abbott",
+      "team": "NEW",
+      "position": "MID",
+      "price": 50,
+      "ownership": 20.0,
+      "prPoints": 6.05,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 11.49,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    },
+    {
+      "name": "Abbott",
+      "team": "ARS",
+      "position": "GKP",
+      "price": 45,
+      "ownership": 20.0,
+      "prPoints": 5.75,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 10.92,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    },
+    {
+      "name": "Kelsal",
+      "team": "TOT",
+      "position": "MID",
+      "price": 70,
+      "ownership": 12.5,
+      "prPoints": 5.15,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 9.79,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    }
+  ],
+  "topGoals": [
+    {
+      "name": "Vasquez",
+      "team": "MCI",
+      "position": "FWD",
+      "price": 145,
+      "ownership": 71.4,
+      "prPoints": 7.9,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 15.01,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    },
+    {
+      "name": "Kelsall",
+      "team": "LIV",
+      "position": "MID",
+      "price": 70,
+      "ownership": 12.5,
+      "prPoints": 5.15,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 9.79,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    }
+  ],
+  "topAssists": [
+    {
+      "name": "Kelsall",
+      "team": "LIV",
+      "position": "MID",
+      "price": 70,
+      "ownership": 12.5,
+      "prPoints": 5.15,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 9.79,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    },
+    {
+      "name": "Abbott",
+      "team": "NEW",
+      "position": "MID",
+      "price": 50,
+      "ownership": 20.0,
+      "prPoints": 6.05,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 11.49,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    }
+  ],
+  "topBonus": [
+    {
+      "name": "Vasquez",
+      "team": "MCI",
+      "position": "FWD",
+      "price": 145,
+      "ownership": 71.4,
+      "prPoints": 7.9,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 15.01,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    },
+    {
+      "name": "Kelsall",
+      "team": "LIV",
+      "position": "MID",
+      "price": 70,
+      "ownership": 12.5,
+      "prPoints": 5.15,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 9.79,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    }
+  ],
+  "topDefCon": [
+    {
+      "name": "Abbott",
+      "team": "ARS",
+      "position": "GKP",
+      "price": 45,
+      "ownership": 20.0,
+      "prPoints": 5.75,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 10.92,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    }
+  ],
+  "bestCleanSheets": [
+    {
+      "name": "Abbott",
+      "team": "ARS",
+      "position": "GKP",
+      "price": 45,
+      "ownership": 20.0,
+      "prPoints": 5.75,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 10.92,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    }
+  ],
+  "bestAttackingFixtures": [
+    {
+      "name": "Vasquez",
+      "team": "MCI",
+      "position": "FWD",
+      "price": 145,
+      "ownership": 71.4,
+      "prPoints": 7.9,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 15.01,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    },
+    {
+      "name": "Kelsall",
+      "team": "LIV",
+      "position": "MID",
+      "price": 70,
+      "ownership": 12.5,
+      "prPoints": 5.15,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 9.79,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    }
+  ],
+  "topTransfersIn": [
+    {
+      "name": "Vasquez",
+      "team": "MCI",
+      "position": "FWD",
+      "price": 145,
+      "ownership": 71.4,
+      "prPoints": 7.9,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 15.01,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    },
+    {
+      "name": "Kelsall",
+      "team": "LIV",
+      "position": "MID",
+      "price": 70,
+      "ownership": 12.5,
+      "prPoints": 5.15,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 9.79,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    }
+  ],
+  "topTransfersOut": [
+    {
+      "name": "Kelsal",
+      "team": "TOT",
+      "position": "MID",
+      "price": 70,
+      "ownership": 12.5,
+      "prPoints": 5.15,
+      "prGoals": 0.42,
+      "prAssists": 0.21,
+      "prBonusPoints": 0.8,
+      "captainProjPoints": 9.79,
+      "leverage": 1.4,
+      "opponents": [
+        {
+          "opponent": "BOU",
+          "isHome": true
+        }
+      ]
+    }
+  ]
+}
