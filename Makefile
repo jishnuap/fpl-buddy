@@ -3,7 +3,7 @@ PY := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 
 .DEFAULT_GOAL := help
-.PHONY: help setup test lint fmt typecheck check context propose show commit serve docker clean
+.PHONY: help setup test lint fmt typecheck check context propose show commit serve docker publish clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -45,8 +45,15 @@ commit: ## Run the deadline job now (respects DRY_RUN)
 serve: ## Run the API and scheduler locally
 	$(VENV)/bin/fpl-buddy serve
 
-docker: ## Build the container image
+docker: ## Build the container image locally
 	docker build -t fpl-buddy:local .
+
+publish: ## Publish an image from CI: make publish TAG=v0.1.0 (or TAG=edge)
+	@test -n "$(TAG)" || (echo "Usage: make publish TAG=v0.1.0  |  make publish TAG=edge"; exit 1)
+	@case "$(TAG)" in \
+	  v*) git tag $(TAG) && git push origin $(TAG) ;; \
+	  *)  gh workflow run publish.yml -f tag=$(TAG) ;; \
+	esac
 
 clean: ## Remove caches and build artifacts
 	rm -rf .pytest_cache .ruff_cache .mypy_cache build dist src/*.egg-info

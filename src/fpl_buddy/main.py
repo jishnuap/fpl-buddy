@@ -5,7 +5,8 @@ LLM run per gameweek, and keeping the scheduler beside the API means the approva
 link and the deadline job read the same store with no coordination.
 
 Scale this to more than one replica and both replicas would propose and commit.
-Keep ``minReplicas: 1``/``maxReplicas: 1`` -- see ``infra/``.
+Run exactly one instance, and don't let it scale to zero -- a stopped container
+has no scheduler, so nothing commits at the deadline. See ``docs/deployment.md``.
 """
 
 from __future__ import annotations

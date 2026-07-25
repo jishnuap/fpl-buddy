@@ -7,7 +7,6 @@
 .gitignore
 tests/
 docs/
-infra/
 Makefile
 HANDOFF.md
 **/__pycache__/
