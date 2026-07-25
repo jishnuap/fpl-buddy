@@ -20,12 +20,25 @@ from __future__ import annotations
 import logging
 import re
 from datetime import UTC, datetime
-from urllib.parse import urldefrag, urljoin, urlparse
+from html import unescape
+from urllib.parse import (
+    parse_qsl,
+    urldefrag,
+    urlencode,
+    urljoin,
+    urlparse,
+    urlunparse,
+)
 
 from .fetch import Fetcher
 from .sources import Source
 
 logger = logging.getLogger(__name__)
+
+# Campaign parameters that identify a referrer, not an article.
+_TRACKING_KEYS = frozenset(
+    {"fbclid", "gclid", "mc_cid", "mc_eid", "ref", "source", "campaign"}
+)
 
 _LINK_RE = re.compile(r'<a\b[^>]*?href=["\']([^"\'#]+)', re.I)
 _LOC_RE = re.compile(r"<loc>\s*([^<\s]+)\s*</loc>", re.I)
@@ -103,7 +116,33 @@ def _acceptable(url: str, source: Source) -> bool:
 
 
 def _clean(base: str, href: str) -> str:
-    return urldefrag(urljoin(base, href.strip()))[0].rstrip("/")
+    """Absolute, fragment-free, tracking-free URL -- the key we deduplicate on.
+
+    Feeds routinely append campaign parameters (the BBC's football feed adds
+    ``?at_medium=RSS&at_campaign=rss``). Left in place they make the same article
+    look new the day a publisher changes its analytics, so they are stripped
+    while genuine query parameters are kept -- plenty of sites still identify
+    posts with ``?p=123``.
+    """
+    # Unescape first. Feed XML escapes ampersands, so a raw link reads
+    # "?at_medium=RSS&amp;at_campaign=rss" -- parse that as-is and the second
+    # parameter is literally named "amp;at_campaign", which then slips past the
+    # tracking filter and lands in the stored URL.
+    absolute = urldefrag(urljoin(base, unescape(href.strip())))[0]
+    parsed = urlparse(absolute)
+    if parsed.query:
+        kept = [
+            (key, value)
+            for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+            if not _is_tracking(key)
+        ]
+        absolute = urlunparse(parsed._replace(query=urlencode(kept)))
+    return absolute.rstrip("/")
+
+
+def _is_tracking(key: str) -> bool:
+    lowered = key.casefold()
+    return lowered.startswith(("utm_", "at_")) or lowered in _TRACKING_KEYS
 
 
 def _from_feed(feed_url: str, source: Source, fetcher: Fetcher) -> list[Candidate]:

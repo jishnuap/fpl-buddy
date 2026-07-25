@@ -409,7 +409,11 @@ def build_tools(context: DecisionContext, client: FPLClient) -> list[BaseTool]:
             f"### {note.title}",
             f"  id: {note.id} | source: {note.source} | trust: {note.trust} "
             f"| published: {(note.published or note.retrieved).date().isoformat()}"
-            + (" | PARTIAL (paywalled)" if note.access == "partial" else ""),
+            + (
+                f" | PARTIAL ({note.partial_reason or 'incomplete'})"
+                if note.access == "partial"
+                else ""
+            ),
             "",
             note.summary or "(no summary)",
         ]

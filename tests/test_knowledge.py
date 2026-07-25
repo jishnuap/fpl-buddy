@@ -278,6 +278,30 @@ def test_a_full_feed_skips_the_root_crawl_entirely(settings, fetcher, allow_robo
     assert not root.called
 
 
+def test_tracking_parameters_are_stripped_but_real_ones_kept(settings, fetcher, allow_robots):
+    """The BBC's feed appends ?at_medium=RSS. Left in, the same article looks new
+    the day a publisher changes its analytics."""
+    allow_robots.get(f"{HOST}/feed").respond(
+        200,
+        text=feed_xml(
+            [
+                (
+                    "Tracked",
+                    # &amp; is how a feed actually escapes this. Parsed without
+                    # unescaping, the second parameter is named "amp;at_campaign"
+                    # and slips past the tracking filter.
+                    f"{HOST}/2026/07/25/one?at_medium=RSS&amp;at_campaign=rss&amp;utm_source=x",
+                    "Sat, 25 Jul 2026 08:00:00 +0000",
+                ),
+                ("Real query", f"{HOST}/2026/07/24/two?p=1234", "Fri, 24 Jul 2026 08:00:00 +0000"),
+            ]
+        ),
+    )
+    urls = [c.url for c in discover(make_source(), fetcher)]
+    assert urls[0] == f"{HOST}/2026/07/25/one", "campaign parameters removed"
+    assert urls[1] == f"{HOST}/2026/07/24/two?p=1234", "genuine identifiers kept"
+
+
 def test_a_dead_feed_does_not_raise(settings, fetcher, allow_robots):
     allow_robots.get(f"{HOST}/feed").respond(500, text="boom")
     assert discover(make_source(), fetcher) == []
@@ -678,7 +702,58 @@ def test_harvest_marks_a_paywalled_article_partial(
     report = harvest(settings, bootstrap=context.bootstrap, model=_FakeSummariser(), store=store)
 
     assert report.partial == 1
-    assert store.all()[0].access == "partial"
+    saved = store.all()[0]
+    assert saved.access == "partial"
+    assert saved.partial_reason == "paywalled"
+
+
+def test_a_long_article_we_truncated_is_not_called_paywalled(
+    settings, sources_file, allow_robots, context, tmp_path
+):
+    """A free article longer than the input budget is incomplete for our own
+    reasons. Telling the agent it was gated is simply false -- and only one of
+    the two is fixable with a subscription."""
+    from fpl_buddy.knowledge.harvest import harvest
+    from fpl_buddy.knowledge.summarize import MAX_INPUT_CHARS
+
+    settings.knowledge_sources_file = str(sources_file)
+    _serve_one_article(allow_robots, body="Words and words. " * (MAX_INPUT_CHARS // 8))
+    model = _FakeSummariser(
+        ArticleSummary(summary="Long piece.", truncated=True, player_names=[])
+    )
+    store = KnowledgeStore(tmp_path / "kb")
+
+    report = harvest(settings, bootstrap=context.bootstrap, model=model, store=store)
+
+    saved = store.all()[0]
+    assert saved.access == "partial"
+    assert "budget" in saved.partial_reason
+    assert "paywall" not in saved.partial_reason
+    assert report.partial == 0, "the paywall counter must not count our own truncation"
+    assert "paywalled" not in saved.index_line()
+
+
+def test_a_short_article_that_stops_dead_is_attributed_to_the_source(
+    settings, sources_file, allow_robots, context, tmp_path
+):
+    """A freemium site can strip its own "restricted to members" notice as
+    boilerplate, leaving text that just stops. Nothing marks it, and it is far
+    below our input budget -- so the source did the cutting, not us."""
+    from fpl_buddy.knowledge.harvest import harvest
+
+    settings.knowledge_sources_file = str(sources_file)
+    _serve_one_article(allow_robots, body="Short and abruptly ending. " * 25)
+    model = _FakeSummariser(
+        ArticleSummary(summary="Stops mid-section.", truncated=True, player_names=[])
+    )
+    store = KnowledgeStore(tmp_path / "kb")
+
+    report = harvest(settings, bootstrap=context.bootstrap, model=model, store=store)
+
+    saved = store.all()[0]
+    assert saved.access == "partial"
+    assert "source" in saved.partial_reason
+    assert report.partial == 1, "attributed to the publisher, so it counts as paywalled"
 
 
 def test_the_article_text_reaches_the_summariser_labelled_untrusted(

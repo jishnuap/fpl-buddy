@@ -19,7 +19,7 @@ from .extract import extract
 from .fetch import Fetcher
 from .sources import Source, load_sources
 from .store import ArticleNote, KnowledgeStore, content_hash, make_id
-from .summarize import resolve_players, summarize
+from .summarize import MAX_INPUT_CHARS, resolve_players, summarize
 
 logger = logging.getLogger(__name__)
 
@@ -120,8 +120,26 @@ def _harvest_source(
             resolve_players(summary.player_names, bootstrap) if bootstrap is not None else []
         )
         published = candidate.published or _parse_published(article.published_raw)
-        access = "partial" if (article.access == "partial" or summary.truncated) else "full"
-        if access == "partial":
+        # Three ways to end up with part of an article, and they are not the
+        # same thing. Only the publisher's ones are fixable with a subscription.
+        #
+        # Marker detection alone is not enough: a freemium site may strip its own
+        # "restricted to members" notice as boilerplate during extraction, or
+        # gate purely with a CSS class, leaving text that simply stops
+        # mid-sentence. When the model reports the text as cut off, the length
+        # tells us who did the cutting -- short means the source, long means us.
+        if article.access == "partial":
+            reason = "paywalled"
+        elif summary.truncated:
+            reason = (
+                "longer than the summariser's input budget"
+                if len(article.text) > MAX_INPUT_CHARS
+                else "cut off at the source (likely paywalled)"
+            )
+        else:
+            reason = ""
+        access = "partial" if reason else "full"
+        if reason.startswith("paywalled") or "paywalled" in reason:
             report.partial += 1
 
         note = ArticleNote(
@@ -137,6 +155,7 @@ def _harvest_source(
             players=players,
             teams=summary.team_names,
             access=access,
+            partial_reason=reason,
             trust=source.trust,
             ttl_days=source.ttl_days,
             content_hash=digest,

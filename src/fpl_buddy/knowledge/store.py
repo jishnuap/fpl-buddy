@@ -50,6 +50,10 @@ class ArticleNote:
     players: list[int] = field(default_factory=list)
     teams: list[str] = field(default_factory=list)
     access: str = "full"
+    # Why we only have part of it: a paywall withheld the rest, or the article
+    # was longer than the summariser's input budget. Conflating the two tells
+    # the agent a free article was gated, which is simply false.
+    partial_reason: str = ""
     trust: str = "unknown"
     ttl_days: int = 21
     content_hash: str = ""
@@ -70,7 +74,7 @@ class ArticleNote:
         when = (self.published or self.retrieved).date().isoformat()
         bits = [f"[{self.id}]", when, self.title]
         if self.access == "partial":
-            bits.append("(partial: paywalled)")
+            bits.append(f"(partial: {self.partial_reason or 'incomplete'})")
         if self.tags:
             bits.append(f"tags: {', '.join(self.tags[:4])}")
         return "  " + " | ".join(bits)
@@ -90,6 +94,7 @@ class ArticleNote:
             "players": self.players,
             "teams": self.teams,
             "access": self.access,
+            "partial_reason": self.partial_reason,
             "trust": self.trust,
             "ttl_days": self.ttl_days,
             "content_hash": self.content_hash,
@@ -138,6 +143,7 @@ class ArticleNote:
                 players=[int(p) for p in (header.get("players") or [])],
                 teams=list(header.get("teams") or []),
                 access=header.get("access", "full"),
+                partial_reason=header.get("partial_reason") or "",
                 trust=header.get("trust", "unknown"),
                 ttl_days=int(header.get("ttl_days", 21)),
                 content_hash=header.get("content_hash", ""),

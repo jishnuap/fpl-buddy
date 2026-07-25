@@ -10,6 +10,15 @@
 # Prefer a feed where one exists: it is one request, it is a stable format, and
 # it is the publisher telling you what is new rather than you guessing from HTML
 # that changes on redesign.
+#
+# Every source below was checked live: the feed returns items, and robots.txt
+# permits crawling. Two that look obvious and are not:
+#
+#   * r/FantasyPL has a working .rss feed, but reddit.com/robots.txt is
+#     "User-agent: * / Disallow: /". The fetcher honours that and would skip
+#     every request, so the source is omitted rather than left in to fail
+#     quietly.
+#   * fantasyyirma.com serves a feed whose newest item is from 2022. Dead site.
 
 sources:
   - name: fantasy-football-scout
@@ -53,3 +62,61 @@ sources:
     # Check FFS's terms before enabling: automated access to members-only
     # content may not be permitted even for members.
     cookie_env: FFS_COOKIE
+
+  # ---------------------------------------------------------------------------
+  # Free, FPL-specific. No paywall, so articles store as `access: full`.
+  - name: all-about-fpl
+    enabled: true
+    base_url: https://allaboutfpl.com
+    discovery:
+      feeds:
+        - https://allaboutfpl.com/feed
+      include_patterns:
+        - '/20\d{2}/\d{2}/'
+      exclude_patterns:
+        - '/tag/'
+        - '/category/'
+      max_articles_per_run: 6
+    tags: [tips]
+    trust: medium
+    ttl_days: 21
+    request_delay_seconds: 2.0
+
+  # ---------------------------------------------------------------------------
+  # Free mainstream football press. Not FPL-specific, which is the point: this is
+  # where injuries, press-conference quotes and rotation talk appear first, and
+  # none of it is in the FPL API. It is also unfiltered -- a good share of any
+  # run will be transfer gossip about players you will never own, and each
+  # article costs one summarisation call. Hence the small caps and short TTL.
+  # Raise `max_articles_per_run` only if the notes justify the spend.
+  - name: bbc-football
+    enabled: true
+    base_url: https://www.bbc.co.uk
+    discovery:
+      # The feed lives on a different host to the articles, which is fine --
+      # only article URLs are checked against base_url.
+      feeds:
+        - https://feeds.bbci.co.uk/sport/football/rss.xml
+      include_patterns:
+        - '/sport/football/articles/'
+      max_articles_per_run: 4
+    tags: [football-news, team-news]
+    trust: high
+    ttl_days: 7
+    request_delay_seconds: 2.0
+
+  - name: guardian-football
+    enabled: true
+    base_url: https://www.theguardian.com
+    discovery:
+      feeds:
+        - https://www.theguardian.com/football/rss
+      include_patterns:
+        - '/football/20\d{2}/'
+      exclude_patterns:
+        - '/live/'          # minute-by-minute pages are not articles
+      max_articles_per_run: 4
+    tags: [football-news]
+    trust: high
+    ttl_days: 7
+    request_delay_seconds: 2.0
