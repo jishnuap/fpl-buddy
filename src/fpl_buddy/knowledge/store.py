@@ -23,6 +23,8 @@ from pathlib import Path
 
 import yaml
 
+from ..config import Settings
+
 logger = logging.getLogger(__name__)
 
 FRONTMATTER_FENCE = "---"
@@ -240,6 +242,29 @@ class KnowledgeStore:
 
 
 # --------------------------------------------------------------------------- #
+
+
+def knowledge_dir(settings: Settings) -> Path:
+    return Path(settings.state_dir) / "knowledge"
+
+
+def open_archive(settings: Settings) -> KnowledgeStore | None:
+    """The archive, if there is one to read.
+
+    Keyed on notes existing rather than on ``KNOWLEDGE_SOURCES_FILE`` being set,
+    which is a different question: that setting says whether the daily job should
+    *collect* articles, and reading what was already collected should not stop
+    working because the source list moved or was unset. Getting this wrong is
+    silent -- the agent simply reasons without any of it.
+    """
+    directory = knowledge_dir(settings)
+    try:
+        if not directory.is_dir() or not any(directory.glob("*.md")):
+            return None
+        return KnowledgeStore(directory)
+    except OSError as exc:
+        logger.warning("Could not open the article archive at %s: %s", directory, exc)
+        return None
 
 
 def make_id(source: str, url: str, published: datetime | None) -> str:

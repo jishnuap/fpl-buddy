@@ -313,13 +313,123 @@ def test_search_articles_finds_a_match_and_flags_it_as_opinion(context):
 def test_search_articles_says_so_when_there_is_nothing(context):
     context.articles = [_article()]
     tools = {_tool_name(t): t for t in build_tools(context, DummyClient())}
-    assert "Nothing matching" in tools["search_articles"].invoke({"query": "goalkeepers"})
+    assert "Nothing in the archive" in tools["search_articles"].invoke({"query": "goalkeepers"})
 
 
 def test_search_articles_degrades_without_a_harvest(context):
     assert context.articles == []
     tools = {_tool_name(t): t for t in build_tools(context, DummyClient())}
-    assert "No harvested articles" in tools["search_articles"].invoke({"query": "anything"})
+    assert "Nothing in the archive" in tools["search_articles"].invoke({"query": "anything"})
+
+
+# The brief carries a recent window; the archive goes back further. These pin the
+# thing that was quietly false before: that the tools could reach past it.
+
+
+def _archive(tmp_path, notes):
+    from fpl_buddy.knowledge.store import KnowledgeStore
+
+    store = KnowledgeStore(tmp_path / "knowledge")
+    for note in notes:
+        store.save(note)
+    return store
+
+
+def test_articles_about_reaches_past_the_briefs_recent_window(context, tmp_path):
+    """A three-week-old set-piece note still decides a captaincy call, and it
+    dropped off the brief long before it stopped mattering."""
+    from datetime import UTC, datetime, timedelta
+
+    old = _article(
+        id="src-2026-07-01-old-setpiece",
+        url="https://news.example.test/old",
+        title="Set-piece duty has changed",
+        published=datetime.now(UTC) - timedelta(days=20),
+        ttl_days=60,
+    )
+    store = _archive(tmp_path, [old])
+
+    context.articles = []  # nothing in the brief at all
+    tools = {_tool_name(t): t for t in build_tools(context, DummyClient(), knowledge=store)}
+
+    out = tools["articles_about"].invoke({"element_id": FWD_CAPTAIN})
+    assert "Set-piece duty has changed" in out
+
+
+def test_search_articles_reaches_past_the_recent_window(context, tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    old = _article(
+        id="src-2026-07-01-old-rotation",
+        url="https://news.example.test/old",
+        summary="The author warns about rotation risk.",
+        published=datetime.now(UTC) - timedelta(days=20),
+        ttl_days=60,
+    )
+    store = _archive(tmp_path, [old])
+    context.articles = []
+    tools = {_tool_name(t): t for t in build_tools(context, DummyClient(), knowledge=store)}
+
+    assert "rotation risk" in tools["search_articles"].invoke({"query": "rotation"})
+
+
+def test_read_article_opens_an_id_that_is_not_in_the_brief(context, tmp_path):
+    """articles_about can hand back an out-of-window id, so read_article has to
+    be able to open one -- otherwise the pair contradict each other."""
+    from datetime import UTC, datetime, timedelta
+
+    old = _article(
+        id="src-2026-07-01-old",
+        url="https://news.example.test/old",
+        published=datetime.now(UTC) - timedelta(days=20),
+        ttl_days=60,
+    )
+    store = _archive(tmp_path, [old])
+    context.articles = []
+    tools = {_tool_name(t): t for t in build_tools(context, DummyClient(), knowledge=store)}
+
+    out = tools["read_article"].invoke({"article_id": "src-2026-07-01-old"})
+    assert "Vasquez" in out
+    assert "No article with id" not in out
+
+
+def test_expired_notes_stay_out_of_reach(context, tmp_path):
+    """Past the window is fine; past its TTL is not. Stale team news is worse
+    than none."""
+    from datetime import UTC, datetime, timedelta
+
+    stale = _article(
+        id="src-2026-06-01-stale",
+        url="https://news.example.test/stale",
+        published=datetime.now(UTC) - timedelta(days=90),
+        ttl_days=21,
+    )
+    store = _archive(tmp_path, [stale])
+    context.articles = []
+    tools = {_tool_name(t): t for t in build_tools(context, DummyClient(), knowledge=store)}
+
+    assert "No harvested article mentions" in tools["articles_about"].invoke(
+        {"element_id": FWD_CAPTAIN}
+    )
+
+
+def test_without_an_archive_the_tools_use_the_brief(context):
+    """No harvest configured must behave exactly as it did before."""
+    context.articles = [_article()]
+    tools = {_tool_name(t): t for t in build_tools(context, DummyClient(), knowledge=None)}
+
+    assert "obvious captain" in tools["search_articles"].invoke({"query": "penalties"})
+    assert "obvious captain" in tools["articles_about"].invoke({"element_id": FWD_CAPTAIN})
+    assert "argues for Vasquez" in tools["read_article"].invoke(
+        {"article_id": "src-2026-07-25-captaincy"}
+    )
+
+
+def test_the_brief_tells_the_agent_the_archive_is_bigger_than_the_list(context):
+    context.articles = [_article()]
+    brief = context.render()
+    assert "archive goes back further" in brief
+    assert "search_articles" in brief and "articles_about" in brief
 
 
 def test_read_article_returns_the_summary_and_claims(context):

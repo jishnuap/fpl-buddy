@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from ..config import Settings
 from ..fpl.models import Bootstrap
@@ -19,7 +18,13 @@ from .discover import discover
 from .extract import extract, from_markdown
 from .fetch import Fetcher
 from .sources import Source, load_sources
-from .store import ArticleNote, KnowledgeStore, content_hash, make_id
+from .store import (
+    ArticleNote,
+    KnowledgeStore,
+    content_hash,
+    knowledge_dir,
+    make_id,
+)
 from .summarize import MAX_INPUT_CHARS, resolve_players, summarize
 
 logger = logging.getLogger(__name__)
@@ -44,10 +49,6 @@ class HarvestReport:
             f"{self.pruned} pruned, {len(self.failures)} failure(s)"
             + (f" [fetched via {backends}]" if backends else "")
         )
-
-
-def knowledge_dir(settings: Settings) -> Path:
-    return Path(settings.state_dir) / "knowledge"
 
 
 def harvest(

@@ -94,11 +94,16 @@ check a real article's path. All `known` means it is working and there is simply
 nothing new. If a feed 404s or redirects to HTML, drop it and use `roots`
 instead; a redirect to a listing page is not a feed.
 
-**Articles are stored but the agent ignores them.** The brief only indexes
-articles within `KNOWLEDGE_INDEX_DAYS`, and `ttl_days` per source drops older
-ones entirely — team news is worse than useless once stale. `fpl-buddy articles`
-shows what survives. Beyond that the agent chooses whether to open one; a
-proposal that never mentions an article is not necessarily a bug.
+**Articles are stored but the agent ignores them.** The brief indexes only
+articles within `KNOWLEDGE_INDEX_DAYS` (up to `KNOWLEDGE_INDEX_LIMIT`) — but the
+tools search the whole archive, so an article missing from the index is still
+reachable via `search_articles` or `articles_about`. What is genuinely gone is
+anything past its source's `ttl_days`, which the harvest prunes. `fpl-buddy
+articles` shows what survives. Beyond that the agent chooses whether to open
+one; a proposal that never cites an article is not necessarily a bug.
+
+Reading does *not* require `KNOWLEDGE_SOURCES_FILE` — only harvesting does. If
+`fpl-buddy articles` lists notes, the agent can reach them.
 
 **Everything is stored as `access: partial`.** The source is paywalled and you
 are fetching it logged out, so only the free portion exists to store. Either

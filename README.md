@@ -115,9 +115,18 @@ crawl roots, with URL patterns, caps and a per-source TTL. Notes land in
 schema.org `Article`, so the archive is readable in Obsidian or any static site
 generator and outlives this project.
 
-The brief gets a one-line **index** of recent articles; the agent loads detail on
-demand via `read_article`, `search_articles` and `articles_about(element_id)`.
-That keeps the token cost flat as the archive grows.
+The brief gets a one-line **index** of recent articles only
+(`KNOWLEDGE_INDEX_DAYS`, `KNOWLEDGE_INDEX_LIMIT`), so its token cost is fixed no
+matter how large the archive gets. The tools read the **whole archive**, past
+that window: `read_article(id)`, `search_articles(query)` and
+`articles_about(element_id)`. A set-piece change written three weeks ago still
+decides a captaincy call today, and it drops off the index long before it stops
+mattering. Notes past their source's `ttl_days` are pruned and unreachable
+either way.
+
+Reading the archive does not depend on `KNOWLEDGE_SOURCES_FILE`: that setting
+says whether the daily job should *collect* articles, which is a different
+question from whether there are any to read.
 
 > **Harvested text is untrusted.** It is fenced as data at the summariser, which
 > can only emit a fixed schema; element ids are resolved from

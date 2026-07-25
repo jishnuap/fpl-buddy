@@ -204,6 +204,29 @@ article -- id, date, headline, tags -- and the agent pulls detail with
 make the per-run token cost a function of how long harvesting has been running,
 which is the wrong thing to make it a function of.
 
+**The index is a window; the tools are not.** These are separate on purpose, and
+the first implementation got it wrong: all three tools filtered the same recent
+list the brief renders, so with a 15-article index and 24 on disk, nine were
+unreachable by any means and the documentation claiming otherwise was simply
+false. The brief still shows only `KNOWLEDGE_INDEX_DAYS`/`KNOWLEDGE_INDEX_LIMIT`
+worth, which is what keeps its cost fixed, but the tools query the store
+directly. The case that decides it: a set-piece or injury note written three
+weeks ago still bears on captaining someone today, and it leaves the index long
+before it stops mattering. `ttl_days` is the real expiry, and pruned notes stay
+unreachable through either path.
+
+The archive is read per tool call rather than cached. Notes are a few KB each and
+an agent makes a handful of these calls, so a cache would buy microseconds while
+being wrong about anything harvested since the process started.
+
+**Reading the archive does not depend on the harvest being configured.**
+`KNOWLEDGE_SOURCES_FILE` says whether the daily job should *collect* articles,
+which is a different question from whether there are any to read. Gating both on
+it meant a `propose` run without that variable set silently reasoned with no
+articles at all -- no index, no tools, no error. `open_archive()` keys on notes
+existing instead, so a moved or unset source list cannot quietly cost the agent
+everything already collected.
+
 **Feeds first, crawling last.** A feed is the publisher stating what is new, in
 a format that does not change on redesign; one request answers "anything new?"
 for a whole site. Crawling listing pages is the fallback, and if the feeds
