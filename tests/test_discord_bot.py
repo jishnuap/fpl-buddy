@@ -19,6 +19,7 @@ import pytest
 from fpl_buddy.decisions.schema import ProposalStatus
 from fpl_buddy.decisions.validate import validate
 from fpl_buddy.discord_bot import formatting, views
+from fpl_buddy.discord_bot.bot import NOTE_REACTION, build_bot
 from fpl_buddy.discord_bot.notifier import DiscordNotifier
 
 from .conftest import FREE_MID_NEW, MID_LIV, make_proposal, make_stored, make_transfer
@@ -267,3 +268,81 @@ def test_notify_proposal_omits_the_view_once_the_proposal_is_terminal(
     )
 
     assert "view" not in channel.calls[0]
+
+
+# -------------------------------------------------------------- note capture
+#
+# No conversation, no replies -- ``on_message`` just files anything sent in the
+# configured channel away as a note for the next scheduled ``propose()``.
+
+
+class _FakeNotes:
+    def __init__(self) -> None:
+        self.added: list[tuple[str, str]] = []
+
+    def add(self, author: str, text: str):
+        self.added.append((author, text))
+        return object()
+
+
+class _FakeOrchestrator:
+    def __init__(self) -> None:
+        self.notes = _FakeNotes()
+
+
+class _FakeAuthor:
+    def __init__(self, *, bot: bool = False, name: str = "jishnu") -> None:
+        self.bot = bot
+        self._name = name
+
+    def __str__(self) -> str:
+        return self._name
+
+
+class _FakeChannelRef:
+    def __init__(self, channel_id: int) -> None:
+        self.id = channel_id
+
+
+class _FakeMessage:
+    def __init__(self, content: str, *, channel_id: int, author_bot: bool = False) -> None:
+        self.content = content
+        self.channel = _FakeChannelRef(channel_id)
+        self.author = _FakeAuthor(bot=author_bot)
+        self.reactions: list[str] = []
+
+    async def add_reaction(self, emoji: str) -> None:
+        self.reactions.append(emoji)
+
+
+@pytest.fixture
+def bot(settings):
+    settings.discord_channel_id = 123
+    return build_bot(settings, orchestrator=_FakeOrchestrator())
+
+
+async def test_on_message_captures_a_note_from_the_configured_channel(bot):
+    message = _FakeMessage("bench Vasquez, he's got a knock", channel_id=123)
+    await bot.on_message(message)
+    assert bot.orchestrator.notes.added == [("jishnu", "bench Vasquez, he's got a knock")]
+    assert message.reactions == [NOTE_REACTION]
+
+
+async def test_on_message_ignores_other_channels(bot):
+    message = _FakeMessage("hello", channel_id=999)
+    await bot.on_message(message)
+    assert bot.orchestrator.notes.added == []
+    assert message.reactions == []
+
+
+async def test_on_message_ignores_its_own_messages(bot):
+    message = _FakeMessage("GW4: proposal posted", channel_id=123, author_bot=True)
+    await bot.on_message(message)
+    assert bot.orchestrator.notes.added == []
+
+
+async def test_on_message_ignores_blank_content(bot):
+    message = _FakeMessage("   ", channel_id=123)
+    await bot.on_message(message)
+    assert bot.orchestrator.notes.added == []
+    assert message.reactions == []

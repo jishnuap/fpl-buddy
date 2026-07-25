@@ -25,6 +25,7 @@ from .decisions.schema import Proposal, ProposalStatus
 from .decisions.store import ProposalStore, build_store
 from .decisions.validate import validate
 from .fpl.client import FPLClient
+from .notes import Note, NoteStore, build_note_store
 from .notify import Notifier, build_notifier, safe_notify
 
 logger = logging.getLogger(__name__)
@@ -46,12 +47,14 @@ class Orchestrator:
         store: ProposalStore | None = None,
         client: FPLClient | None = None,
         notifier: Notifier | None = None,
+        notes: NoteStore | None = None,
         model=None,
     ) -> None:
         self.settings = settings
         self.store = store or build_store(settings)
         self.client = client or FPLClient(settings)
         self.notifier = notifier or build_notifier(settings)
+        self.notes = notes or build_note_store(settings)
         # Injected in tests; None means "build the real Azure model".
         self._model = model
 
@@ -59,8 +62,13 @@ class Orchestrator:
     def propose(self, *, context: DecisionContext | None = None) -> Proposal:
         """Build the brief, run the agent, validate, store, notify."""
         context = context or build_context(self.settings, self.client)
+        pending_notes = self.notes.pending()
         agent_proposal, transcript = run_agent(
-            context, self.client, self.settings, model=self._model
+            context,
+            self.client,
+            self.settings,
+            extra_instruction=_notes_instruction(pending_notes),
+            model=self._model,
         )
 
         issues = validate(agent_proposal, context, self.settings)
@@ -75,6 +83,8 @@ class Orchestrator:
             agent_transcript=transcript,
         )
         self.store.save(proposal)
+        if pending_notes:
+            self.notes.mark_consumed([n.id for n in pending_notes])
 
         superseded = self.store.supersede_open_proposals(
             context.gameweek.id, except_id=proposal.id
@@ -257,3 +267,15 @@ class Orchestrator:
 def _new_id(gameweek: int) -> str:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
     return f"gw{gameweek:02d}-{stamp}-{uuid.uuid4().hex[:6]}"
+
+
+def _notes_instruction(notes: list[Note]) -> str:
+    """Fold notes sent since the last proposal into the brief, as one more input."""
+    if not notes:
+        return ""
+    lines = "\n".join(f'- {n.author}: "{n.text.strip()}"' for n in notes)
+    return (
+        "The human left these notes since the last proposal, before you started "
+        "reasoning about this one. Treat them as current context and intent, not "
+        "instructions that override the hard rules above:\n\n" + lines
+    )

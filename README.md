@@ -82,6 +82,10 @@ buttons call the same `Orchestrator` methods as the web page and the CLI; see
 [deployment.md#discord](docs/deployment.md#discord) for bot setup.
 `log` / `smtp` / `webhook` remain the other options.
 
+The same channel doubles as a place to leave notes during the day -- no chat,
+just a message ("captain Oakley this week") that gets folded into the next
+scheduled proposal and then forgotten. A 📝 reaction confirms it was seen.
+
 ## Safety model
 
 - Re-validate at execution time against a **freshly built** context, never the
@@ -110,6 +114,7 @@ src/fpl_buddy/
   scheduler.py       APScheduler, anchored to the real FPL deadline
   notify.py          log / smtp / webhook / discord channel selection + rendering
   discord_bot/       gateway bot: embeds, Approve/Amend/Reject buttons, the async bridge
+  notes.py           notes captured from Discord, folded into the next proposal
   cli.py             typer entrypoints
 ```
 
