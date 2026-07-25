@@ -16,9 +16,6 @@ on:
 permissions:
   contents: read
 
-env:
-  IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/fpl-buddy
-
 jobs:
   publish:
     name: publish
@@ -48,7 +45,9 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.IMAGE }}
+          # Inlined rather than pulled from a workflow-level `env`: the `secrets`
+          # context is not available there, so IMAGE would silently be "/fpl-buddy".
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/fpl-buddy
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
