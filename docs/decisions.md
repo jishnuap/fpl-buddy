@@ -84,6 +84,30 @@ to keep in sync with a cloud provider's API version.
 every pull request to prove the Dockerfile works, and pushes nothing. `v*` tags
 and manual dispatch publish. An accidental merge cannot ship an image.
 
+**FPL's OAuth migration made token refresh mandatory.** The handoff described
+auth as `pl_profile` + `sessionid` cookies. FPL now issues a PingOne
+`access_token` (8h) and `refresh_token` (~180 days) instead, and
+`/api/my-team/{entry}/` returns `403 "Authentication credentials were not
+provided."` unless the access token is sent as a bearer header. Since a gameweek
+cycle spans 36 hours and the access token lasts 8, the token held when a proposal
+is made is *always* dead by the time it would be submitted — so refresh is part
+of the core loop, not a nicety. The client asks the authenticator for credentials
+on every request rather than caching them for the life of the process, for the
+same reason.
+
+Confirmed empirically rather than assumed: the OIDC discovery document advertises
+the `refresh_token` grant, and a probe with a deliberately invalid token returns
+`invalid_grant` (not `invalid_client`) when `client_id` is sent with no secret —
+so FPL's OAuth client is public and refresh needs no secret we don't have. The
+issuer and client id are read from the token's own claims, so an FPL-side move to
+a different PingOne environment needs no code change.
+
+**`verify_session()` probes `/my-team/`, not `/me/`.** After the OAuth migration
+`/me/` returns `200` for a cookie jar with no usable access token, so a check
+against it reported a healthy session that could not read the squad or submit
+anything. A pre-flight check that passes when the thing it protects is broken is
+worse than no check.
+
 ## Deliberately not done
 
 - **Multi-entry support.** One team, one entry id.

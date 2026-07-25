@@ -27,7 +27,9 @@ or re-validation blocked it — both want a human.
 ## Day-to-day commands
 
 ```bash
-fpl-buddy verify              # is the session alive?
+fpl-buddy verify              # can it actually read the squad?
+fpl-buddy token               # token expiry, and whether it can renew itself
+fpl-buddy token --refresh     # force a refresh, to prove the flow works
 fpl-buddy schedule            # when will the jobs run?
 fpl-buddy context             # exactly what the agent will read
 fpl-buddy propose             # run the agent now
@@ -41,11 +43,23 @@ fpl-buddy commit              # run the deadline job by hand
 
 ## When something goes wrong
 
-**`403` on login.** Expected from a datacenter IP. Use `FPL_COOKIE_HEADER`; see
-[deployment.md](deployment.md#the-cookie-header).
+**`403` on login.** Expected from a datacenter IP, and unavoidable now that FPL
+uses OAuth. Use `FPL_COOKIE_HEADER`; see [deployment.md](deployment.md#authentication).
 
-**Session dies mid-week.** The client refreshes once on a `401`/`403` and retries.
-If that fails, `verify` says so and the propose job logs it. Re-paste the cookie.
+**`403 "Authentication credentials were not provided."` on `/my-team/`.** The
+access token is missing or dead. `fpl-buddy token` shows the state; a valid
+refresh token renews it automatically, and if refresh is rejected the error says
+to re-paste. The header must contain `access_token` **and** `refresh_token` —
+without the latter, the session cannot survive its 8-hour lifetime.
+
+**It worked, then stopped after one refresh.** `STATE_DIR` isn't durable. Refresh
+tokens rotate on use, so the copy in your environment is spent after the first
+refresh and only the cache holds the live one. Mount a volume.
+
+**`verify` passes but the propose job can't read the squad.** Shouldn't happen
+now — `verify` probes `/my-team/`. If you see it, check that `FPL_ENTRY_ID` is
+set, because with no entry id `verify` falls back to `/me/`, which passes on
+almost anything.
 
 **Proposal failed validation.** The notification lists every reason. It will not
 be submitted — the guardrails run again at commit time and block it there too.

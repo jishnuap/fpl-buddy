@@ -24,7 +24,7 @@ from .decisions.executor import ExecutionBlocked
 from .decisions.schema import Proposal, ProposalStatus
 from .decisions.store import build_store
 from .decisions.validate import validate
-from .fpl.auth import FPLAuthError
+from .fpl.auth import FPLAuthenticator, FPLAuthError
 from .fpl.client import FPLClient
 from .orchestrator import NotActionable, Orchestrator, ProposalNotFound
 
@@ -77,8 +77,54 @@ def login(verbose: bool = False) -> None:
             "from DevTools (Network -> any /api/me/ request -> Request Headers -> cookie)."
         )
     if not client.verify_session():
-        _die("Got cookies, but /api/me/ still rejects them. They may be for another account.")
+        _die("Got credentials, but /my-team/ still rejects them. Check FPL_ENTRY_ID.")
     console.print("[bold green]✓[/] Session is live and cached.")
+
+
+@app.command()
+def token(
+    refresh: bool = typer.Option(False, "--refresh", help="Force a refresh now."),
+    verbose: bool = False,
+) -> None:
+    """Show the state of the FPL credentials, and optionally refresh them.
+
+    FPL access tokens last 8 hours while a gameweek cycle spans 36, so the
+    refresh flow is what makes unattended running possible. Run this once with
+    --refresh to prove it works before trusting a deadline to it.
+    """
+    settings = _setup(verbose)
+    auth = FPLAuthenticator(settings)
+
+    current = auth.peek()
+    if current is None:
+        _die(
+            "No credentials at all. Paste FPL_COOKIE_HEADER from DevTools "
+            "(Network -> any /api/me/ request -> Request Headers -> cookie)."
+        )
+
+    console.print(f"[bold]Now:[/]   {current.describe()}")
+    console.print(f"Cache:  {auth.cache.path}")
+    if current.is_oauth:
+        console.print(f"Issuer: {current.token_issuer}")
+        if not current.can_refresh:
+            console.print(
+                "[yellow]![/] No refresh token, so this session dies in hours and "
+                "cannot renew itself. Re-paste a cookie header that includes "
+                "refresh_token."
+            )
+
+    if not refresh:
+        if current.is_expiring():
+            console.print("[yellow]![/] Expiring: the next request will refresh it.")
+        return
+
+    with console.status("Refreshing..."):
+        try:
+            renewed = auth.refresh_now()
+        except FPLAuthError as exc:
+            _die(str(exc))
+    console.print(f"[bold green]✓[/] After: {renewed.describe()}")
+    console.print("Rotated tokens were written to the cache.")
 
 
 @app.command()

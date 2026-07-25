@@ -53,15 +53,25 @@ rules any host has to satisfy (one instance, never scaled to zero, durable
 
 ## Authentication
 
-Two paths, tried in order:
+FPL uses OAuth: a short-lived `access_token` (**8 hours**) plus a long-lived
+`refresh_token` (**~180 days**), issued by PingOne and carried as cookies.
 
-1. **Login** — `FPL_EMAIL` + `FPL_PASSWORD`. Works from a residential IP.
-2. **Pasted cookies** — `FPL_COOKIE_HEADER`. Premier League's bot protection
-   routinely returns `403` to datacenter IPs, so **treat this as the likely
-   production path.** Open fantasy.premierleague.com, DevTools → Network → any
-   `/api/me/` request → Request Headers → copy the whole `cookie` value.
+Paste the cookie header from your browser — DevTools → Network → any `/api/me/`
+request → Request Headers → the whole `cookie` value — into
+`FPL_COOKIE_HEADER`. Programmatic login is not viable off your own machine;
+Premier League's bot protection returns `403` to datacenter IPs.
 
-Cookies are cached under `STATE_DIR` so restarts don't re-login.
+Because a gameweek cycle (propose at T-36h, commit at T-45m) outlives the access
+token, **refresh is load-bearing, not an optimisation.** It happens automatically
+before any request that needs it. Two consequences:
+
+- `STATE_DIR` must be durable. Refresh tokens rotate on use, so the cache holds
+  the only live copy after the first refresh.
+- Prove it once before trusting a deadline to it: `fpl-buddy token --refresh`.
+
+```bash
+.venv/bin/fpl-buddy token       # expiry, and whether it can renew itself
+```
 
 ## Safety model
 
