@@ -73,6 +73,15 @@ before any request that needs it. Two consequences:
 .venv/bin/fpl-buddy token       # expiry, and whether it can renew itself
 ```
 
+## Notifications
+
+`NOTIFY_CHANNEL=discord` posts each proposal as an embed with Approve / Amend /
+Reject buttons in a channel of your choice -- a phone notification you can act
+on without opening the review link, though that link still works too. The
+buttons call the same `Orchestrator` methods as the web page and the CLI; see
+[deployment.md#discord](docs/deployment.md#discord) for bot setup.
+`log` / `smtp` / `webhook` remain the other options.
+
 ## Safety model
 
 - Re-validate at execution time against a **freshly built** context, never the

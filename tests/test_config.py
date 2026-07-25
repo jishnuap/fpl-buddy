@@ -102,6 +102,13 @@ def test_credential_helpers_read_correctly():
     assert build(fpl_cookie_header="pl_profile=x; sessionid=y").has_cookie_header is True
 
 
+def test_discord_needs_both_the_token_and_the_channel():
+    assert build().has_discord is False
+    assert build(discord_bot_token="abc").has_discord is False, "no channel to post to"
+    assert build(discord_channel_id="123").has_discord is False, "no token to connect with"
+    assert build(discord_bot_token="abc", discord_channel_id="123").has_discord is True
+
+
 def test_trailing_slash_is_stripped_from_the_public_url():
     assert build(public_base_url="https://x.test/").public_base_url == "https://x.test"
     assert build(public_base_url="https://x.test///").public_base_url == "https://x.test"

@@ -196,6 +196,22 @@ def test_webhook_posts_the_subject_text_and_proposal_id(settings, context):
     assert "/a/" in payload["text"]
 
 
+def test_discord_without_a_bot_is_an_explicit_error(settings):
+    """``notify_channel=discord`` needs a live bot instance passed in explicitly --
+    it can't be conjured from settings alone the way the other channels are."""
+    settings.notify_channel = "discord"
+    with pytest.raises(RuntimeError, match="no bot was passed"):
+        build_notifier(settings)
+
+
+def test_discord_with_a_bot_builds_a_discord_notifier(settings):
+    from fpl_buddy.discord_bot.notifier import DiscordNotifier
+
+    settings.notify_channel = "discord"
+    notifier = build_notifier(settings, discord_bot=object())
+    assert isinstance(notifier, DiscordNotifier)
+
+
 def test_webhook_failure_is_raised(settings, context):
     import httpx
     import respx

@@ -16,6 +16,7 @@ import logging
 import smtplib
 from abc import ABC, abstractmethod
 from email.message import EmailMessage
+from typing import Any
 
 import httpx
 
@@ -90,7 +91,7 @@ class WebhookNotifier(Notifier):
         logger.info("Posted %r to the webhook.", subject)
 
 
-def build_notifier(settings: Settings) -> Notifier:
+def build_notifier(settings: Settings, *, discord_bot: Any = None) -> Notifier:
     match settings.notify_channel:
         case "none":
             return NullNotifier()
@@ -98,6 +99,14 @@ def build_notifier(settings: Settings) -> Notifier:
             return SmtpNotifier(settings)
         case "webhook":
             return WebhookNotifier(settings)
+        case "discord":
+            if discord_bot is None:
+                raise RuntimeError(
+                    "NOTIFY_CHANNEL=discord but no bot was passed to build_notifier()."
+                )
+            from .discord_bot.notifier import DiscordNotifier
+
+            return DiscordNotifier(discord_bot, settings)
         case _:
             return LogNotifier()
 
