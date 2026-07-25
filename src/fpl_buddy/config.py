@@ -106,6 +106,14 @@ class Settings(BaseSettings):
         description="Most articles to list in the brief. Detail is loaded by tool.",
     )
 
+    transcript_input_chars: int = Field(
+        default=40_000,
+        ge=1000,
+        description=(
+            "Input budget for a video transcript, which runs far longer than an "
+            "article: a half-hour video is around 28,000 characters."
+        ),
+    )
     knowledge_fetch_backends: str = Field(
         default="firecrawl,scrapling,httpx",
         description=(

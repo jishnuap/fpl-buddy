@@ -83,40 +83,35 @@ sources:
     request_delay_seconds: 2.0
 
   # ---------------------------------------------------------------------------
-  # Free mainstream football press. Not FPL-specific, which is the point: this is
-  # where injuries, press-conference quotes and rotation talk appear first, and
-  # none of it is in the FPL API. It is also unfiltered -- a good share of any
-  # run will be transfer gossip about players you will never own, and each
-  # article costs one summarisation call. Hence the small caps and short TTL.
-  # Raise `max_articles_per_run` only if the notes justify the spend.
-  - name: bbc-football
+  # YouTube channels. Discovery uses the per-channel upload feed; the content is
+  # the video's caption track, read with youtube-transcript-api.
+  #
+  # ignore_robots is required and not a formality: YouTube's robots.txt
+  # disallows both /feeds/videos.xml (this feed) and /api/ (the caption
+  # endpoint). Leave it false and the source finds nothing. It is per-source and
+  # off everywhere else, so the exception stays visible.
+  #
+  # `channel` takes an @handle, a /channel/UC... URL, or a bare UC... id. A
+  # handle is resolved once per run from the channel page, which is not itself
+  # disallowed.
+  - name: lets-talk-fpl
     enabled: true
-    base_url: https://www.bbc.co.uk
+    kind: youtube
+    channel: "@LetsTalkFPL"
+    ignore_robots: true
     discovery:
-      # The feed lives on a different host to the articles, which is fine --
-      # only article URLs are checked against base_url.
-      feeds:
-        - https://feeds.bbci.co.uk/sport/football/rss.xml
-      include_patterns:
-        - '/sport/football/articles/'
-      max_articles_per_run: 4
-    tags: [football-news, team-news]
-    trust: high
-    ttl_days: 7
-    request_delay_seconds: 2.0
-
-  - name: guardian-football
-    enabled: true
-    base_url: https://www.theguardian.com
-    discovery:
-      feeds:
-        - https://www.theguardian.com/football/rss
-      include_patterns:
-        - '/football/20\d{2}/'
+      # Titles are matched here, not URLs -- a watch URL is an opaque id, so the
+      # title is the only signal for skipping shorts and streams.
       exclude_patterns:
-        - '/live/'          # minute-by-minute pages are not articles
-      max_articles_per_run: 4
-    tags: [football-news]
-    trust: high
-    ttl_days: 7
+        - '(?i)#shorts'
+        - '(?i)\blive\b'
+      max_articles_per_run: 2
+    # The feed carries no duration, so length is judged from the transcript: a
+    # short comes in under a couple of thousand characters, a multi-hour stream
+    # far over the ceiling. A half-hour video is around 28,000.
+    min_transcript_chars: 1500
+    max_transcript_chars: 80000
+    tags: [video, tips]
+    trust: medium
+    ttl_days: 14
     request_delay_seconds: 2.0

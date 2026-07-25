@@ -83,8 +83,14 @@ def summarize(
     settings: Settings,
     *,
     model: Any | None = None,
+    max_chars: int | None = None,
 ) -> ArticleSummary | None:
-    """Summarise one article. Returns None if the model could not be reached."""
+    """Summarise one article. Returns None if the model could not be reached.
+
+    ``max_chars`` overrides the input budget. Transcripts need it: a half-hour
+    video is ~28,000 characters against an article budget of 12,000, so the
+    default would throw away most of the video and then report it as truncated.
+    """
     if model is None:
         from ..agent.build import build_model
 
@@ -94,7 +100,7 @@ def summarize(
             logger.error("Could not build a model to summarise with: %s", exc)
             return None
 
-    body = text[:MAX_INPUT_CHARS]
+    body = text[: max_chars or MAX_INPUT_CHARS]
     prompt = (
         f"Article title: {title}\n\n"
         "--- BEGIN UNTRUSTED ARTICLE TEXT ---\n"

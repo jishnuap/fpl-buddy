@@ -117,6 +117,26 @@ def _drop_interstitial(markdown: str) -> str:
     return "\n".join(remainder)
 
 
+def from_transcript(transcript, title: str, author: str = "") -> Article | None:
+    """Wrap a video transcript as an article.
+
+    No extraction to do -- captions are already text, with no boilerplate to
+    strip and no markup to unpick. The paywall check is skipped too: a video is
+    not gated behind a subscription in the way a freemium article is, and the
+    markers would only ever fire on someone *saying* the words.
+    """
+    text = _tidy(transcript.text)
+    if not text:
+        return None
+    return Article(
+        url=transcript.url,
+        title=title.strip() or transcript.url,
+        text=text,
+        author=author.strip(),
+        access="full",
+    )
+
+
 def _strip_markdown(markdown: str) -> str:
     """Drop the syntax, keep the prose.
 

@@ -1074,3 +1074,197 @@ def test_a_paywall_marker_in_rendered_markdown_is_still_caught():
     markdown = "Intro paragraph. " * 40 + "\n\nThis content is restricted to members."
     article = from_markdown(markdown, f"{HOST}/a")
     assert article is not None and article.access == "partial"
+
+
+# ----------------------------------------------------------------------- youtube
+#
+# youtube-transcript-api is an optional install and absent in CI, so the
+# transcript path is driven through injected fakes.
+
+
+YT_FEED = """<?xml version="1.0"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015">
+  <entry><yt:videoId>aaaaaaaaaaa</yt:videoId><title>Best FPL picks for GW1</title>
+    <published>2026-07-25T10:00:00+00:00</published></entry>
+  <entry><yt:videoId>bbbbbbbbbbb</yt:videoId><title>Quick thought #shorts</title>
+    <published>2026-07-24T10:00:00+00:00</published></entry>
+  <entry><yt:videoId>ccccccccccc</yt:videoId><title>LIVE Q&amp;A stream</title>
+    <published>2026-07-23T10:00:00+00:00</published></entry>
+</feed>"""
+
+
+def youtube_source(**overrides) -> Source:
+    payload = {
+        "name": "channel",
+        "kind": "youtube",
+        "channel": "UCHcvyjfCHf5D1RmVc216qWA",
+        "ignore_robots": True,
+        "discovery": {"exclude_patterns": ["(?i)#shorts", r"(?i)\bLIVE\b"]},
+        "request_delay_seconds": 0,
+    }
+    payload.update(overrides)
+    return Source.model_validate(payload)
+
+
+def test_a_youtube_source_needs_a_channel():
+    with pytest.raises(ValueError, match="needs a channel"):
+        Source.model_validate({"name": "x", "kind": "youtube"})
+
+
+def test_a_channel_makes_no_sense_on_an_article_source():
+    with pytest.raises(ValueError, match="only applies to kind 'youtube'"):
+        Source.model_validate({"name": "x", "base_url": HOST, "channel": "@someone"})
+
+
+def test_a_youtube_source_without_the_robots_opt_out_is_warned_about(caplog):
+    """Both the feed and the caption endpoint are disallowed, so it would
+    silently find nothing."""
+    youtube_source(ignore_robots=False)
+    assert "robots.txt" in caplog.text
+
+
+def test_ignore_robots_is_per_source_and_off_by_default(settings):
+    with respx.mock(assert_all_called=False) as router:
+        router.get(url__regex=r".*/robots\.txt").respond(
+            200, text="User-agent: *\nDisallow: /feeds/"
+        )
+        page = router.get("https://www.youtube.com/feeds/videos.xml").respond(200, text="ok")
+        fetcher = Fetcher(settings)
+
+        blocked = fetcher.get("https://www.youtube.com/feeds/videos.xml", source=make_source())
+        assert not blocked.ok and not page.called, "default still honours robots"
+
+        allowed = fetcher.get(
+            "https://www.youtube.com/feeds/videos.xml", source=youtube_source()
+        )
+        assert allowed.ok and page.called
+
+
+def test_channel_ids_resolve_from_every_accepted_form():
+    from fpl_buddy.knowledge.youtube import resolve_channel_id
+
+    uc = "UCHcvyjfCHf5D1RmVc216qWA"
+    assert resolve_channel_id(uc, lambda url: "") == uc
+    assert resolve_channel_id(f"https://www.youtube.com/channel/{uc}", lambda url: "") == uc
+
+    fetched = []
+
+    def page(url):
+        fetched.append(url)
+        return f'window.x = {{"channelId":"{uc}","other":1}};'
+
+    assert resolve_channel_id("@SomeChannel", page) == uc
+    assert fetched == ["https://www.youtube.com/@SomeChannel"]
+
+
+def test_an_unresolvable_channel_returns_nothing():
+    from fpl_buddy.knowledge.youtube import resolve_channel_id
+
+    assert resolve_channel_id("@Missing", lambda url: "") is None
+    assert resolve_channel_id("@Missing", lambda url: "<html>no ids here</html>") is None
+
+
+def test_video_ids_are_read_from_urls_and_bare_ids():
+    from fpl_buddy.knowledge.youtube import video_id_from_url
+
+    assert video_id_from_url("https://www.youtube.com/watch?v=aaaaaaaaaaa") == "aaaaaaaaaaa"
+    assert video_id_from_url("https://youtu.be/aaaaaaaaaaa") == "aaaaaaaaaaa"
+    assert video_id_from_url("aaaaaaaaaaa") == "aaaaaaaaaaa"
+    assert video_id_from_url("https://www.youtube.com/") is None
+
+
+def test_the_upload_feed_becomes_dated_candidates(settings, fetcher, allow_robots):
+    allow_robots.get(url__regex=r".*/feeds/videos\.xml.*").respond(200, text=YT_FEED)
+    found = discover(youtube_source(), fetcher)
+
+    assert [c.url for c in found] == ["https://www.youtube.com/watch?v=aaaaaaaaaaa"]
+    assert found[0].title == "Best FPL picks for GW1"
+    assert found[0].published.day == 25
+
+
+def test_youtube_patterns_filter_on_the_title_not_the_url(settings, fetcher, allow_robots):
+    """A watch URL is an opaque id, so the title is the only signal for
+    skipping shorts and streams."""
+    allow_robots.get(url__regex=r".*/feeds/videos\.xml.*").respond(200, text=YT_FEED)
+    urls = [c.url for c in discover(youtube_source(), fetcher)]
+
+    assert "https://www.youtube.com/watch?v=bbbbbbbbbbb" not in urls, "#shorts"
+    assert "https://www.youtube.com/watch?v=ccccccccccc" not in urls, "LIVE stream"
+
+
+def test_a_blocked_feed_explains_what_is_missing(settings, fetcher, caplog):
+    with respx.mock(assert_all_called=False) as router:
+        router.get(url__regex=r".*/robots\.txt").respond(200, text="User-agent: *\nDisallow: /")
+        assert discover(youtube_source(ignore_robots=False), fetcher) == []
+    assert "ignore_robots" in caplog.text
+
+
+def test_timestamps_are_marked_through_the_transcript():
+    from fpl_buddy.knowledge.youtube import _with_timestamps
+
+    class _Snippet:
+        def __init__(self, start, text):
+            self.start = start
+            self.text = text
+
+        duration = 3.0
+
+    text = _with_timestamps(
+        [_Snippet(0, "hello there"), _Snippet(30, "still talking"), _Snippet(75, "much later")]
+    )
+    assert "[0:00]" in text
+    assert "[1:15]" in text, "a marker roughly once a minute"
+    assert "[0:30]" not in text, "not one per segment"
+    assert "hello there" in text and "much later" in text
+
+
+def test_a_transcript_becomes_an_article_without_extraction():
+    from fpl_buddy.knowledge.extract import from_transcript
+    from fpl_buddy.knowledge.youtube import Transcript
+
+    transcript = Transcript(video_id="aaaaaaaaaaa", text="Some FPL talk. " * 50)
+    article = from_transcript(transcript, "Best picks", author="channel")
+
+    assert article is not None
+    assert article.url == "https://www.youtube.com/watch?v=aaaaaaaaaaa"
+    assert article.title == "Best picks"
+    assert article.access == "full", "a video is not paywalled the way an article is"
+    assert article.usable
+
+
+def test_a_video_note_declares_itself_a_videoobject(store):
+    """schema.org has a type for this, and the header is meant to be portable."""
+    note = ArticleNote(
+        id="channel-2026-07-25-aaaaaaaaaaa",
+        title="Best picks",
+        url="https://www.youtube.com/watch?v=aaaaaaaaaaa",
+        source="channel",
+        kind="youtube",
+        video_id="aaaaaaaaaaa",
+    )
+    text = store.save(note).read_text()
+    assert "schema_type: VideoObject" in text
+    assert "video_id: aaaaaaaaaaa" in text
+
+    loaded = store.get("channel-2026-07-25-aaaaaaaaaaa")
+    assert loaded.kind == "youtube"
+    assert loaded.video_id == "aaaaaaaaaaa"
+
+
+def test_an_article_note_is_still_an_article(store):
+    store.save(note())
+    assert "schema_type: Article" in store.path_for(note()).read_text()
+
+
+def test_a_video_id_is_used_as_the_filename_slug():
+    """Slugifying a watch URL gives "watch-v-aaaaaaaaaaa", which is nobody's
+    idea of a readable id."""
+    from datetime import UTC, datetime
+
+    made = make_id(
+        "channel",
+        "https://www.youtube.com/watch?v=aaaaaaaaaaa",
+        datetime(2026, 7, 25, tzinfo=UTC),
+        slug="aaaaaaaaaaa",
+    )
+    assert made == "channel-2026-07-25-aaaaaaaaaaa"

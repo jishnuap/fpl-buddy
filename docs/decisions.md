@@ -289,6 +289,35 @@ back beginning with `ERR_BLOCKED_BY_CLIENT`. Those leading lines are trimmed
 before summarising. Only the opening of a document is examined, so an article
 that merely discusses cookies halfway down is left alone.
 
+**A YouTube channel is a source kind, not a second pipeline.** Discovery uses
+the per-channel upload feed and the content is the caption track; everything
+after that -- summarising into the same schema, resolving player names, the
+markdown note, the TTL -- is shared with articles. Only two steps differ: there
+is no extraction to do, because captions are already text with no boilerplate,
+and the input budget is separate. A half-hour video runs to ~28,000 characters
+against an article budget of 12,000, so reusing it would discard most of the
+video and then report it as truncated. `TRANSCRIPT_INPUT_CHARS` handles it in
+one call; chunk-and-merge was the alternative and costs more tokens *and* more
+failure modes for a problem a larger budget solves outright.
+
+Speech recognition mangles surnames, which would matter if names were matched
+against the raw captions. They are not: ids resolve from the *summary's*
+`player_names`, which the model spells correctly from context, so the existing
+design absorbs most of it.
+
+Timestamps are marked through the transcript roughly once a minute, so a claim
+can cite a point in the video and be checked against it -- the same provenance
+role the stored `Source extract` plays for articles.
+
+**Robots exceptions are per source, written down, and off by default.** YouTube
+disallows both `/feeds/videos.xml` and `/api/` to crawlers, and the transcript
+library brings its own HTTP client that never passes through `fetch.py` at all.
+Left implicit, that would quietly falsify the "we honour robots.txt" property
+the rest of the harvester has. `ignore_robots: true` makes the exception a thing
+you can grep for, and a YouTube source that omits it is warned at load time that
+it will find nothing. The question of whether to set it is the operator's, and
+YouTube's terms on automated access are a separate one from robots.
+
 **Untrusted web text is contained at the summariser, not at the reader.** This
 is the first feature that puts arbitrary web prose into a prompt that drives real
 team decisions, so the boundary is drawn where the text arrives:

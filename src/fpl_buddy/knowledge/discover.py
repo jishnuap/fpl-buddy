@@ -50,13 +50,21 @@ _PUBDATE_RE = re.compile(r"<(?:pubDate|updated|published)>\s*([^<]+?)\s*</", re.
 
 
 class Candidate:
-    """A URL worth considering, plus whatever date the source volunteered."""
+    """A URL worth considering, plus whatever the source volunteered about it.
 
-    __slots__ = ("url", "published")
+    ``title`` is usually empty -- a feed's title is not to be trusted over the
+    article's own -- but a YouTube video has no page to extract one from, so
+    there the feed is the only source of it.
+    """
 
-    def __init__(self, url: str, published: datetime | None = None) -> None:
+    __slots__ = ("url", "published", "title")
+
+    def __init__(
+        self, url: str, published: datetime | None = None, title: str = ""
+    ) -> None:
         self.url = url
         self.published = published
+        self.title = title
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"Candidate({self.url!r}, {self.published!r})"
@@ -64,6 +72,9 @@ class Candidate:
 
 def discover(source: Source, fetcher: Fetcher) -> list[Candidate]:
     """Candidate article URLs for one source, deduplicated and capped."""
+    if source.kind == "youtube":
+        return _from_youtube(source, fetcher)
+
     seen: dict[str, Candidate] = {}
 
     for url in source.discovery.feeds:
@@ -103,6 +114,59 @@ def discover(source: Source, fetcher: Fetcher) -> list[Candidate]:
 
 
 # --------------------------------------------------------------------------- #
+
+
+def _from_youtube(source: Source, fetcher: Fetcher) -> list[Candidate]:
+    """The channel's upload feed: fifteen newest videos, with ids and dates.
+
+    The feed is parsed directly rather than through the generic reader because
+    it carries ``<yt:videoId>``, which is the thing worth having -- guessing it
+    back out of a watch link would be strictly worse.
+    """
+    from .youtube import WATCH_URL, feed_url, resolve_channel_id
+
+    def _page(url: str) -> str:
+        response = fetcher.get(url, source=source)
+        return response.text if response.ok else ""
+
+    channel_id = resolve_channel_id(source.channel or "", _page)
+    if not channel_id:
+        logger.warning("%s: could not resolve channel %r.", source.name, source.channel)
+        return []
+
+    response = fetcher.get(feed_url(channel_id), source=source)
+    if not response.ok:
+        logger.info(
+            "%s: upload feed unavailable (status %s). YouTube disallows it in "
+            "robots.txt -- this source needs ignore_robots: true.",
+            source.name, response.status,
+        )
+        return []
+
+    out: list[Candidate] = []
+    for entry in re.findall(r"<entry>(.*?)</entry>", response.text, re.S):
+        video = re.search(r"<yt:videoId>([\w-]{11})</yt:videoId>", entry)
+        if not video:
+            continue
+        title = re.search(r"<title>(.*?)</title>", entry, re.S)
+        url = WATCH_URL.format(video_id=video.group(1))
+        # Patterns match on the title here, not the URL: a watch URL is an
+        # opaque id, so "#shorts" or "LIVE" is the only signal available.
+        haystack = unescape(title.group(1).strip()) if title else url
+        if not source.discovery.matches(haystack):
+            continue
+        stamp = re.search(r"<published>(.*?)</published>", entry, re.S)
+        out.append(
+            Candidate(
+                url,
+                _parse_date(stamp.group(1)) if stamp else None,
+                title=haystack if title else "",
+            )
+        )
+
+    out.sort(key=lambda c: c.published or datetime.min.replace(tzinfo=UTC), reverse=True)
+    logger.info("%s: upload feed yielded %d video(s).", source.name, len(out))
+    return out[: source.discovery.max_articles_per_run]
 
 
 def _acceptable(url: str, source: Source) -> bool:

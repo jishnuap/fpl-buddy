@@ -110,7 +110,12 @@ cp sources.example.yaml sources.yaml     # edit; then set KNOWLEDGE_SOURCES_FILE
 ```
 
 Sources are entirely config-driven: feeds, sitemaps, or listing pages used as
-crawl roots, with URL patterns, caps and a per-source TTL. Notes land in
+crawl roots, with URL patterns, caps and a per-source TTL. A source can also be
+a **YouTube channel** (`kind: youtube`) -- discovery reads the channel's upload
+feed and the content is the video's caption track, summarised into the same
+notes as everything else. That needs `ignore_robots: true` per source, because
+YouTube disallows both the feed and the caption endpoint to crawlers; it is off
+everywhere by default so the exception stays visible. Notes land in
 `${STATE_DIR}/knowledge` as markdown with a YAML header whose fields follow
 schema.org `Article`, so the archive is readable in Obsidian or any static site
 generator and outlives this project.

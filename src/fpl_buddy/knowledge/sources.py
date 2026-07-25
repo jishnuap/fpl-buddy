@@ -13,9 +13,10 @@ import logging
 import os
 import re
 from pathlib import Path
+from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +92,38 @@ class Source(BaseModel):
 
     name: str = Field(description="Stable slug; used in article ids and filenames.")
     enabled: bool = True
-    base_url: str
+    base_url: str = Field(default="https://www.youtube.com")
+    kind: Literal["article", "youtube"] = Field(
+        default="article",
+        description=(
+            "'article' fetches and extracts web pages. 'youtube' reads a "
+            "channel's upload feed and takes the transcript of each video."
+        ),
+    )
+    channel: str | None = Field(
+        default=None,
+        description="YouTube channel: a @handle, a /channel/UC... URL, or a bare UC... id.",
+    )
+    ignore_robots: bool = Field(
+        default=False,
+        description=(
+            "Fetch this source even where robots.txt disallows it. Off everywhere "
+            "by default. YouTube needs it: both the upload feed and the caption "
+            "endpoint are disallowed to crawlers, so a youtube source that leaves "
+            "this false will find nothing. Set it deliberately, per source, so the "
+            "exception is visible rather than assumed."
+        ),
+    )
+    min_transcript_chars: int = Field(
+        default=1500,
+        ge=0,
+        description="Below this a 'video' is a short or a trailer; skip it.",
+    )
+    max_transcript_chars: int = Field(
+        default=80_000,
+        ge=1000,
+        description="Above this it is a multi-hour stream, not a tips video.",
+    )
     discovery: Discovery = Field(default_factory=Discovery)
     tags: list[str] = Field(default_factory=list)
     trust: str = Field(
@@ -123,6 +155,23 @@ class Source(BaseModel):
         if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", value):
             raise ValueError("name must be a lowercase slug, e.g. fantasy-football-scout")
         return value
+
+    @model_validator(mode="after")
+    def _coherent(self) -> Source:
+        """Catch a misconfigured source at load time, not at 5am in the harvest."""
+        if self.kind == "youtube":
+            if not self.channel:
+                raise ValueError(f"source {self.name}: kind 'youtube' needs a channel")
+            if not self.ignore_robots:
+                logger.warning(
+                    "Source %s is a YouTube channel but ignore_robots is false. Both the "
+                    "upload feed and the caption endpoint are disallowed by YouTube's "
+                    "robots.txt, so this source will find nothing.",
+                    self.name,
+                )
+        elif self.channel:
+            raise ValueError(f"source {self.name}: 'channel' only applies to kind 'youtube'")
+        return self
 
     def cookie(self) -> str | None:
         """Resolve the configured credential from the environment, if set.

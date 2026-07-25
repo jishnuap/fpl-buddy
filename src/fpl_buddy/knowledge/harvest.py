@@ -15,7 +15,7 @@ from ..config import Settings
 from ..fpl.models import Bootstrap
 from .backends import build_backends, fetch_article
 from .discover import discover
-from .extract import extract, from_markdown
+from .extract import extract, from_markdown, from_transcript
 from .fetch import Fetcher
 from .sources import Source, load_sources
 from .store import (
@@ -105,25 +105,31 @@ def _harvest_source(
             report.skipped_known += 1
             continue
 
-        content = fetch_article(candidate.url, source, backends)
-        if content is None:
-            report.failures.append(f"{source.name}: could not fetch {candidate.url}")
-            continue
-        report.fetched += 1
-        report.by_backend[content.backend] = report.by_backend.get(content.backend, 0) + 1
+        if source.kind == "youtube":
+            article, video_id = _video_article(candidate, source, report)
+            if article is None:
+                continue
+        else:
+            video_id = ""
+            content = fetch_article(candidate.url, source, backends)
+            if content is None:
+                report.failures.append(f"{source.name}: could not fetch {candidate.url}")
+                continue
+            report.fetched += 1
+            report.by_backend[content.backend] = report.by_backend.get(content.backend, 0) + 1
 
-        # HTML first, whichever backend produced it, so every article goes
-        # through the same boilerplate removal. Markdown is only used when a
-        # backend could not give us HTML at all.
-        article = extract(content.html, candidate.url) if content.html else None
-        if article is None and content.markdown:
-            article = from_markdown(
-                content.markdown,
-                candidate.url,
-                title=content.title,
-                author=content.author,
-                published=content.published,
-            )
+            # HTML first, whichever backend produced it, so every article goes
+            # through the same boilerplate removal. Markdown is only used when a
+            # backend could not give us HTML at all.
+            article = extract(content.html, candidate.url) if content.html else None
+            if article is None and content.markdown:
+                article = from_markdown(
+                    content.markdown,
+                    candidate.url,
+                    title=content.title,
+                    author=content.author,
+                    published=content.published,
+                )
         if article is None or not article.usable:
             logger.info("Nothing usable extracted from %s.", candidate.url)
             continue
@@ -133,7 +139,15 @@ def _harvest_source(
             report.skipped_known += 1
             continue
 
-        summary = summarize(article.title, article.text, settings, model=model)
+        summary = summarize(
+            article.title,
+            article.text,
+            settings,
+            model=model,
+            max_chars=(
+                settings.transcript_input_chars if source.kind == "youtube" else None
+            ),
+        )
         if summary is None:
             report.failures.append(f"{source.name}: could not summarise {candidate.url}")
             continue
@@ -150,14 +164,15 @@ def _harvest_source(
         # gate purely with a CSS class, leaving text that simply stops
         # mid-sentence. When the model reports the text as cut off, the length
         # tells us who did the cutting -- short means the source, long means us.
+        budget = settings.transcript_input_chars if source.kind == "youtube" else MAX_INPUT_CHARS
         if article.access == "partial":
             reason = "paywalled"
-        elif summary.truncated:
-            reason = (
-                "longer than the summariser's input budget"
-                if len(article.text) > MAX_INPUT_CHARS
-                else "cut off at the source (likely paywalled)"
-            )
+        elif summary.truncated and len(article.text) > budget:
+            reason = "longer than the summariser's input budget"
+        elif summary.truncated and source.kind != "youtube":
+            # A speaker trailing off is not a truncated document, so this only
+            # applies to written sources.
+            reason = "cut off at the source (likely paywalled)"
         else:
             reason = ""
         access = "partial" if reason else "full"
@@ -165,7 +180,7 @@ def _harvest_source(
             report.partial += 1
 
         note = ArticleNote(
-            id=make_id(source.name, candidate.url, published),
+            id=make_id(source.name, candidate.url, published, slug=video_id),
             title=article.title,
             url=candidate.url,
             source=source.name,
@@ -181,12 +196,46 @@ def _harvest_source(
             trust=source.trust,
             ttl_days=source.ttl_days,
             content_hash=digest,
+            kind=source.kind,
+            video_id=video_id,
             extract=article.text[:1200],
         )
         store.save(note)
         known[candidate.url] = digest
         report.stored += 1
         logger.info("Stored %s (%s).", note.id, access)
+
+
+def _video_article(candidate, source: Source, report: HarvestReport):
+    """Fetch and wrap one video's transcript.
+
+    Length is the filter that matters here. The upload feed carries no duration,
+    so a sixty-second short and a two-hour stream arrive looking identical to a
+    twenty-minute tips video -- the transcript is the first place their size
+    becomes visible, and both extremes are worth skipping.
+    """
+    from .youtube import fetch_transcript, video_id_from_url
+
+    video_id = video_id_from_url(candidate.url) or ""
+    if not video_id:
+        return None, ""
+
+    transcript = fetch_transcript(video_id)
+    if transcript is None:
+        # No captions at all: a live stream, music, or captions switched off.
+        return None, video_id
+    report.fetched += 1
+    report.by_backend["transcript"] = report.by_backend.get("transcript", 0) + 1
+
+    size = len(transcript.text)
+    if size < source.min_transcript_chars:
+        logger.info("Skipping %s: transcript is %d chars, likely a short.", video_id, size)
+        return None, video_id
+    if size > source.max_transcript_chars:
+        logger.info("Skipping %s: transcript is %d chars, likely a stream.", video_id, size)
+        return None, video_id
+
+    return from_transcript(transcript, candidate.title or video_id, author=source.name), video_id
 
 
 def _parse_published(raw: str):

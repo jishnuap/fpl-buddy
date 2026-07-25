@@ -40,6 +40,8 @@ firecrawl = ["firecrawl-py>=4.0"]
 # Pulls playwright/patchright. The plain Fetcher needs no browser binaries;
 # SCRAPLING_STEALTH=true additionally requires `scrapling install`.
 scrapling = ["scrapling[fetchers]>=0.4"]
+# Video transcripts. Small and pure-python; no browser, no API key.
+youtube = ["youtube-transcript-api>=1.0"]
 dev = [
     "pytest>=8.2",
     "pytest-asyncio>=0.23",
@@ -76,7 +78,7 @@ warn_unused_ignores = true
 [[tool.mypy.overrides]]
 module = [
     "apscheduler.*", "azure.*", "deepagents.*", "itsdangerous.*",
-    "firecrawl.*", "scrapling.*", "trafilatura.*",
+    "firecrawl.*", "scrapling.*", "trafilatura.*", "youtube_transcript_api.*",
 ]
 ignore_missing_imports = true
 

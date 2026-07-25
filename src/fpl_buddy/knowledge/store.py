@@ -28,7 +28,9 @@ from ..config import Settings
 logger = logging.getLogger(__name__)
 
 FRONTMATTER_FENCE = "---"
+# schema.org types, so the header maps onto JSON-LD without translation.
 SCHEMA_TYPE = "Article"
+VIDEO_SCHEMA_TYPE = "VideoObject"
 
 # Provenance extract kept beside the summary: enough to check a claim against
 # the original without storing (or redistributing) the whole piece.
@@ -51,6 +53,8 @@ class ArticleNote:
     tags: list[str] = field(default_factory=list)
     players: list[int] = field(default_factory=list)
     teams: list[str] = field(default_factory=list)
+    kind: str = "article"
+    video_id: str = ""
     access: str = "full"
     # Why we only have part of it: a paywall withheld the rest, or the article
     # was longer than the summariser's input budget. Conflating the two tells
@@ -62,6 +66,10 @@ class ArticleNote:
     extract: str = ""
 
     # ------------------------------------------------------------------ derived
+    @property
+    def schema_type(self) -> str:
+        return VIDEO_SCHEMA_TYPE if self.kind == "youtube" else SCHEMA_TYPE
+
     @property
     def age_days(self) -> float:
         stamp = self.published or self.retrieved
@@ -85,11 +93,12 @@ class ArticleNote:
     def to_markdown(self) -> str:
         header = {
             "id": self.id,
-            "schema_type": SCHEMA_TYPE,
+            "schema_type": self.schema_type,
             "headline": self.title,
             "url": self.url,
             "source": self.source,
             "author": self.author,
+            **({"video_id": self.video_id} if self.video_id else {}),
             "datePublished": self.published.isoformat() if self.published else None,
             "dateRetrieved": self.retrieved.isoformat(),
             "tags": self.tags,
@@ -144,6 +153,10 @@ class ArticleNote:
                 tags=list(header.get("tags") or []),
                 players=[int(p) for p in (header.get("players") or [])],
                 teams=list(header.get("teams") or []),
+                kind=header.get("kind") or (
+                    "youtube" if header.get("schema_type") == VIDEO_SCHEMA_TYPE else "article"
+                ),
+                video_id=header.get("video_id") or "",
                 access=header.get("access", "full"),
                 partial_reason=header.get("partial_reason") or "",
                 trust=header.get("trust", "unknown"),
@@ -267,10 +280,17 @@ def open_archive(settings: Settings) -> KnowledgeStore | None:
         return None
 
 
-def make_id(source: str, url: str, published: datetime | None) -> str:
-    """Stable, readable, filesystem-safe id for one article."""
+def make_id(
+    source: str, url: str, published: datetime | None, *, slug: str = ""
+) -> str:
+    """Stable, readable, filesystem-safe id for one article.
+
+    ``slug`` overrides the one derived from the URL. A YouTube watch URL has no
+    readable tail -- slugifying it gives "watch-v-yioo3dluoew" -- so the video
+    id is passed in instead.
+    """
     date = (published or datetime.now(UTC)).date().isoformat()
-    slug = url.rstrip("/").rsplit("/", 1)[-1]
+    slug = slug or url.rstrip("/").rsplit("/", 1)[-1]
     slug = re.sub(r"[^a-z0-9]+", "-", slug.casefold()).strip("-")[:60]
     if not slug:
         slug = hashlib.sha256(url.encode()).hexdigest()[:10]
