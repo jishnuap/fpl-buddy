@@ -46,20 +46,28 @@ class FPLClient:
         }
 
     def _auth_headers(self, *, referer: str) -> dict[str, str]:
-        if self._session is None:
-            self._session = self.auth.get_session_cookies()
+        """Build authorised headers against currently-valid credentials.
+
+        The authenticator is asked every time rather than cached on the instance
+        for the life of the process. That matters here: the access token lives 8
+        hours and this process stays up for weeks, so a session captured at
+        startup is dead long before the deadline job runs. Asking each time is
+        cheap -- it is a cache read unless the token is actually near expiry.
+        """
+        session = self.auth.get_session_cookies()
+        self._session = session
         headers = self._base_headers()
         headers.update(
             {
-                "Cookie": self._session.as_header(),
+                "Cookie": session.as_header(),
                 "Content-Type": "application/json",
                 "X-Requested-With": "XMLHttpRequest",
                 "Origin": "https://fantasy.premierleague.com",
                 "Referer": referer,
             }
         )
-        if "access_token" in self._session.cookies:
-            headers["Authorization"] = f"Bearer {self._session.cookies['access_token']}"
+        if session.access_token:
+            headers["Authorization"] = f"Bearer {session.access_token}"
         return headers
 
     @retry(
@@ -237,9 +245,17 @@ class FPLClient:
 
     # ------------------------------------------------------------------ utils
     def verify_session(self) -> bool:
-        """Cheap check that our cookies still authenticate."""
+        """Check that our credentials can read the squad.
+
+        Deliberately probes ``/my-team/`` rather than ``/me/``. Since FPL moved
+        to OAuth, ``/me/`` answers ``200`` for a cookie jar with no usable access
+        token at all, so a check against it reports a healthy session that cannot
+        read the squad or submit anything -- the exact false confidence a
+        pre-flight check exists to prevent.
+        """
+        probe = self.my_team if self.settings.fpl_entry_id else self.me
         try:
-            self.me()
+            probe()
             return True
         except (FPLApiError, FPLAuthError) as exc:
             logger.warning("Session verification failed: %s", exc)

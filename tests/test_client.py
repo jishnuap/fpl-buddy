@@ -287,14 +287,44 @@ def test_transport_errors_are_retried(authed_settings):
 
 @respx.mock
 def test_verify_session_reports_health(authed_settings):
-    respx.get(f"{API}/me/").mock(return_value=httpx.Response(200, json={"player": {}}))
+    respx.get(f"{API}/my-team/999999/").mock(
+        return_value=httpx.Response(200, json=load_json("my-team.json"))
+    )
     assert FPLClient(authed_settings).verify_session() is True
 
 
 @respx.mock
 def test_verify_session_is_false_when_rejected(authed_settings):
-    respx.get(f"{API}/me/").mock(return_value=httpx.Response(403, text="no"))
+    respx.get(f"{API}/my-team/999999/").mock(return_value=httpx.Response(403, text="no"))
     assert FPLClient(authed_settings).verify_session() is False
+
+
+@respx.mock
+def test_verify_session_probes_the_squad_not_just_me(authed_settings):
+    """Regression: /me/ answers 200 for a session that cannot read the squad.
+
+    Since FPL moved to OAuth, a cookie jar with no usable access token still
+    gets a 200 from /me/. Probing it reported a healthy session that would then
+    fail at the deadline -- so the check has to hit the endpoint that matters.
+    """
+    me = respx.get(f"{API}/me/").mock(return_value=httpx.Response(200, json={"player": {}}))
+    respx.get(f"{API}/my-team/999999/").mock(
+        return_value=httpx.Response(
+            403, json={"detail": "Authentication credentials were not provided."}
+        )
+    )
+
+    assert FPLClient(authed_settings).verify_session() is False
+    assert me.call_count == 0, "a 200 from /me/ must not be treated as proof"
+
+
+@respx.mock
+def test_verify_session_falls_back_to_me_without_an_entry_id(settings):
+    """No entry id configured: /me/ is the only thing left to probe."""
+    settings.fpl_cookie_header = _secret(COOKIE)
+    settings.fpl_entry_id = 0
+    respx.get(f"{API}/me/").mock(return_value=httpx.Response(200, json={"player": {}}))
+    assert FPLClient(settings).verify_session() is True
 
 
 # ----------------------------------------------------------------------- writes

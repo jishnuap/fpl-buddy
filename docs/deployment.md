@@ -93,25 +93,49 @@ short version of what actually matters:
 Pass secrets as your platform's secret references, not as plaintext in a
 deployment manifest you commit.
 
-## The cookie header
+## Authentication
 
-Premier League fronts login with bot protection that routinely returns `403` to
-datacenter IPs. Plan on the cookie path anywhere other than your own machine:
+FPL uses OAuth. Your session is a short-lived `access_token` plus a long-lived
+`refresh_token`, both issued by PingOne and carried as cookies. Premier League's
+bot protection returns `403` to datacenter IPs, so programmatic login is not
+available anywhere but your own machine — the pasted header is the way in:
 
 1. Log in at fantasy.premierleague.com in a normal browser.
 2. DevTools → Network → click any `/api/me/` request.
 3. Request Headers → copy the entire `cookie` value.
-4. Set it as `FPL_COOKIE_HEADER`. It must contain `pl_profile` and `sessionid`.
+4. Set it as `FPL_COOKIE_HEADER`. It must contain `access_token` and
+   `refresh_token`.
 
-Cookies expire. When `/healthz` is fine but the propose job logs auth failures,
-re-paste the header and restart. A calendar reminder before the first deadline of
-each month is cheaper than a missed gameweek.
+The lifetimes are what matter operationally:
 
-Verify from wherever it runs:
+| Token | Lives | Consequence |
+|---|---|---|
+| `access_token` | **8 hours** | Shorter than one gameweek cycle (propose T-36h → commit T-45m), so it is *always* refreshed at least once per cycle. |
+| `refresh_token` | **~180 days** | You re-paste roughly twice a season, not twice a week. |
+
+Refresh happens automatically before any request that needs it. Two things follow
+that are easy to get wrong:
+
+- **`STATE_DIR` must be durable.** Refreshed tokens are cached there, and the
+  refresh token **rotates on every use** — the copy in your environment is spent
+  the moment the first refresh succeeds. An ephemeral `STATE_DIR` gives you
+  exactly one refresh per paste, and then the deadline job starts failing.
+- **Prove the refresh before trusting a deadline to it:**
 
 ```bash
+docker exec fpl-buddy fpl-buddy token --refresh
+```
+
+Check state at any time, without touching the network:
+
+```bash
+docker exec fpl-buddy fpl-buddy token
 docker exec fpl-buddy fpl-buddy verify
 ```
+
+`verify` probes `/my-team/`, not `/me/` — `/me/` answers `200` for a session with
+no usable access token at all, so it will happily tell you everything is fine
+while the squad is unreadable.
 
 ## First gameweek
 
