@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -116,6 +116,27 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     port: int = 8080
     timezone: str = "Asia/Kolkata"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _blank_means_unset(cls, data: Any) -> Any:
+        """An empty environment variable falls back to the default.
+
+        A ``.env`` template with ``FPL_ENTRY_ID=`` left blank, or a host that
+        injects an unset secret as an empty string, would otherwise fail integer
+        parsing with an opaque pydantic error at import time -- instead of the
+        clear "no entry id configured" message from the code that needs it.
+
+        This is also the safe direction for the switches that matter: a blank
+        ``DRY_RUN`` becomes ``True``, not ``False``.
+        """
+        if isinstance(data, dict):
+            return {
+                key: value
+                for key, value in data.items()
+                if not (isinstance(value, str) and not value.strip())
+            }
+        return data
 
     @field_validator("public_base_url")
     @classmethod

@@ -58,6 +58,8 @@ class FPLClient:
                 "Referer": referer,
             }
         )
+        if "access_token" in self._session.cookies:
+            headers["Authorization"] = f"Bearer {self._session.cookies['access_token']}"
         return headers
 
     @retry(
