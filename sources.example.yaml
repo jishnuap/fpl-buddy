@@ -1,0 +1,55 @@
+# Article sources for the daily harvest.
+#
+#   KNOWLEDGE_SOURCES_FILE=./sources.yaml
+#   cp sources.example.yaml sources.yaml   # then edit
+#
+# This file is safe to commit: credentials are referenced by the NAME of an
+# environment variable (`cookie_env`), never written here.
+#
+# Discovery is tried in order -- feeds, then sitemaps, then crawling `roots`.
+# Prefer a feed where one exists: it is one request, it is a stable format, and
+# it is the publisher telling you what is new rather than you guessing from HTML
+# that changes on redesign.
+
+sources:
+  - name: fantasy-football-scout
+    enabled: true
+    base_url: https://www.fantasyfootballscout.co.uk
+    discovery:
+      # The site-wide WordPress feed. Per-category feeds redirect to HTML here,
+      # so the category pages below are crawled as roots instead.
+      feeds:
+        - https://www.fantasyfootballscout.co.uk/feed
+      roots:
+        - https://www.fantasyfootballscout.co.uk/articles
+        - https://www.fantasyfootballscout.co.uk/team-news
+        - https://www.fantasyfootballscout.co.uk/category/team-news
+        - https://www.fantasyfootballscout.co.uk/fantasy-premier-league-set-piece-takers
+      # Real posts live under /YYYY/MM/DD/. Everything else on a listing page is
+      # navigation, tags, or an author archive.
+      include_patterns:
+        - '/20\d{2}/\d{2}/\d{2}/'
+      exclude_patterns:
+        - '/tag/'
+        - '/author/'
+        - '/page/'
+      # 0 = fetch the roots above and take the article links off them. Raising
+      # this follows non-article links too, which on a site this size means
+      # hundreds of requests for very little; the page budget is the backstop.
+      max_depth: 0
+      max_pages_per_run: 8
+      max_articles_per_run: 12
+    tags: [tips, team-news]
+    trust: high
+    ttl_days: 21
+    request_delay_seconds: 2.0
+    # Fantasy Football Scout is freemium: articles cut off at "restricted to
+    # Chief Scout Members" and the rest is never sent to a logged-out client, so
+    # no crawler or headless browser can recover it. If you hold a membership,
+    # put your session cookie header in this environment variable and full
+    # articles will be stored instead of partial ones. Leave it unset and you
+    # get the free portion, marked `access: partial`.
+    #
+    # Check FFS's terms before enabling: automated access to members-only
+    # content may not be permitted even for members.
+    cookie_env: FFS_COOKIE

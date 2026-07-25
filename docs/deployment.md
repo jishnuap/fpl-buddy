@@ -89,6 +89,8 @@ short version of what actually matters:
 | `STATE_BACKEND`, `STATE_DIR` | `file` + a mounted volume, or `azure_table`. |
 | `NOTIFY_CHANNEL`, `WEBHOOK_URL` / `SMTP_*` / `DISCORD_BOT_TOKEN` + `DISCORD_CHANNEL_ID` | `discord` posts a proposal with Approve/Amend/Reject buttons; see [below](#discord). |
 | `FIXTURE_HORIZON_GAMEWEEKS` | How many gameweeks of fixtures the agent sees (default 5). One extra request per run; degrades to the current gameweek if it fails. |
+| `KNOWLEDGE_SOURCES_FILE` | Path to the article-source YAML. Empty disables harvesting. Mount the file into the container. See [below](#harvesting-articles). |
+| `KNOWLEDGE_HARVEST_HOUR`, `KNOWLEDGE_INDEX_DAYS`, `KNOWLEDGE_INDEX_LIMIT` | When the daily harvest runs, and how much of the archive reaches the brief. |
 | `DRY_RUN` | Leave `true` until you have worked through [verify-payloads.md](verify-payloads.md). |
 
 Pass secrets as your platform's secret references, not as plaintext in a
@@ -174,6 +176,54 @@ pattern on the message's `custom_id`, not by anything held in memory. Notes
 survive a restart too, for the same reason proposals do -- see `STATE_BACKEND`
 above; a note captured just before a redeploy would otherwise silently never
 reach the agent.
+
+## Harvesting articles
+
+A daily job collects FPL tips and team news from sources you list, summarises
+each one, and stores it as markdown the agent can read while reasoning.
+
+```bash
+cp sources.example.yaml sources.yaml
+export KNOWLEDGE_SOURCES_FILE=./sources.yaml
+.venv/bin/fpl-buddy harvest --dry-run   # what would be collected, no writes
+.venv/bin/fpl-buddy harvest             # collect, summarise, store
+.venv/bin/fpl-buddy articles            # what's in the store now
+```
+
+In a container, mount the file and point at it:
+
+```bash
+docker run -d --name fpl-buddy --restart unless-stopped \
+  -p 8080:8080 --env-file .env -v fpl-buddy-state:/data \
+  -v "$PWD/sources.yaml:/app/sources.yaml:ro" \
+  -e KNOWLEDGE_SOURCES_FILE=/app/sources.yaml \
+  youruser/fpl-buddy:0.1.0
+```
+
+Notes go to `${STATE_DIR}/knowledge`, so the same durability requirement as
+proposals applies — on a `STATE_BACKEND=azure_table` deployment there is no
+durable filesystem, and harvesting would need a blob-backed store to survive
+restarts. Set `KNOWLEDGE_HARVEST_HOUR` well before the propose window so a
+proposal reasons over that morning's articles rather than yesterday's.
+
+Each source declares how to find articles. Prefer a feed: it is one request, it
+is a stable format, and it is the publisher telling you what is new. Listing
+pages (`roots`) are the fallback and are crawled within a strict page budget —
+`max_depth: 0` means the roots themselves, which is almost always what you want.
+
+**Paywalls.** A freemium site returns `200` with the first part of the article
+and a signup pitch; the rest is never sent to a logged-out client, so no crawler
+and no headless browser can recover it. Those notes are stored with
+`access: partial` and the agent is told they were cut off. If you hold a
+subscription, point `cookie_env` at an environment variable containing your own
+session cookie and full articles are stored instead — check the site's terms
+first, since automated access to members-only content is often not permitted even
+for members. There is no paywall circumvention in this codebase.
+
+**Harvested text is untrusted.** It is fenced as data at the summariser, which
+can only return a fixed schema; element ids are resolved from `bootstrap-static`
+rather than taken from articles; and the brief and tools label it as third-party
+opinion. See [decisions.md](decisions.md) for what that does and does not buy.
 
 ## First gameweek
 

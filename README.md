@@ -97,6 +97,39 @@ rolls), and it hands over a pre-computed **legal captain shortlist** drawn only
 from your squad — the projection leaderboards are league-wide, and prompt wording
 alone did not stop the agent captaining a player it did not own.
 
+## Harvested articles
+
+A daily job collects FPL tips and team news from sources you configure, writes
+one markdown file per article, and lets the agent read them while it reasons.
+
+```bash
+cp sources.example.yaml sources.yaml     # edit; then set KNOWLEDGE_SOURCES_FILE
+.venv/bin/fpl-buddy harvest --dry-run    # what would be collected
+.venv/bin/fpl-buddy harvest              # collect and summarise
+.venv/bin/fpl-buddy articles             # what's in the store
+```
+
+Sources are entirely config-driven: feeds, sitemaps, or listing pages used as
+crawl roots, with URL patterns, caps and a per-source TTL. Notes land in
+`${STATE_DIR}/knowledge` as markdown with a YAML header whose fields follow
+schema.org `Article`, so the archive is readable in Obsidian or any static site
+generator and outlives this project.
+
+The brief gets a one-line **index** of recent articles; the agent loads detail on
+demand via `read_article`, `search_articles` and `articles_about(element_id)`.
+That keeps the token cost flat as the archive grows.
+
+> **Harvested text is untrusted.** It is fenced as data at the summariser, which
+> can only emit a fixed schema; element ids are resolved from
+> `bootstrap-static`, never taken from an article; and every rendering says it is
+> third-party opinion. A hostile page can argue for a bad transfer — as any bad
+> tipster can — but not issue instructions, and deterministic validation plus
+> your approval still sit underneath. See [decisions.md](docs/decisions.md).
+
+Paywalled sources yield only their free portion, marked `access: partial`. If you
+hold a subscription, `cookie_env` names an environment variable holding your own
+session cookie. There is no paywall circumvention here and there won't be.
+
 ## Notifications
 
 `NOTIFY_CHANNEL=discord` posts each proposal as an embed with Approve / Amend /
@@ -140,6 +173,8 @@ src/fpl_buddy/
   notify.py          log / smtp / webhook / discord channel selection + rendering
   discord_bot/       gateway bot: embeds, Approve/Amend/Reject buttons, the async bridge
   notes.py           notes captured from Discord, folded into the next proposal
+  knowledge/         daily article harvest: sources, crawl, extract, summarise,
+                     markdown store the agent reads on demand
   cli.py             typer entrypoints
 ```
 

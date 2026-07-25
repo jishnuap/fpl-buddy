@@ -87,6 +87,24 @@ reads a finite budget and rolls. In a normal one-or-two-transfer week, rolling i
 frequently the correct answer and not a bug; check the proposal's reasoning
 before assuming otherwise.
 
+**The harvest collects nothing.** Run `fpl-buddy harvest --dry-run`: it lists
+every candidate URL per source and marks each `new` or `known`. No candidates at
+all usually means the `include_patterns` don't match the site's article URLs —
+check a real article's path. All `known` means it is working and there is simply
+nothing new. If a feed 404s or redirects to HTML, drop it and use `roots`
+instead; a redirect to a listing page is not a feed.
+
+**Articles are stored but the agent ignores them.** The brief only indexes
+articles within `KNOWLEDGE_INDEX_DAYS`, and `ttl_days` per source drops older
+ones entirely — team news is worse than useless once stale. `fpl-buddy articles`
+shows what survives. Beyond that the agent chooses whether to open one; a
+proposal that never mentions an article is not necessarily a bug.
+
+**Everything is stored as `access: partial`.** The source is paywalled and you
+are fetching it logged out, so only the free portion exists to store. Either
+supply a subscription cookie via the source's `cookie_env`, or accept intros
+only. No crawler setting changes this — the content is not sent.
+
 **Every proposal fails with `captain_not_in_squad`.** The brief should contain a
 `## Legal captain / vice options` section listing only players you own. If it is
 missing, the agent is picking from the league-wide projection leaderboards

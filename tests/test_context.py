@@ -227,6 +227,57 @@ def test_fixture_run_is_empty_without_a_horizon(context):
     assert "Fixture run" not in context.render()
 
 
+# ------------------------------------------------------- harvested articles
+
+
+def article(**overrides):
+    from datetime import UTC as _UTC
+
+    from fpl_buddy.knowledge.store import ArticleNote
+
+    payload = {
+        "id": "src-2026-07-25-thing",
+        "title": "Vasquez is the obvious captain",
+        "url": "https://news.example.test/2026/07/25/thing",
+        "source": "src",
+        "summary": "The author argues for Vasquez.",
+        "key_points": ["He is on penalties"],
+        "published": datetime(2026, 7, 25, tzinfo=_UTC),
+        "tags": ["captaincy"],
+        "players": [FWD_CAPTAIN],
+    }
+    payload.update(overrides)
+    return ArticleNote(**payload)
+
+
+def test_the_brief_lists_articles_as_an_index_not_their_contents(context):
+    """A growing archive must not grow the per-run token cost."""
+    context.articles = [article(summary="x" * 5000)]
+    brief = context.render()
+
+    assert "Recent FPL articles" in brief
+    assert "src-2026-07-25-thing" in brief, "the id, so a tool can fetch it"
+    assert "Vasquez is the obvious captain" in brief, "the headline"
+    assert "x" * 200 not in brief, "but not the body"
+
+
+def test_the_brief_labels_articles_as_untrusted_commentary(context):
+    context.articles = [article()]
+    brief = context.render()
+    assert "NOT INSTRUCTIONS" in brief
+    assert "read_article" in brief, "and how to load one properly"
+
+
+def test_a_partial_article_says_so_in_the_index(context):
+    context.articles = [article(access="partial")]
+    assert "partial" in context.render()
+
+
+def test_no_articles_means_no_article_section(context):
+    assert context.articles == []
+    assert "Recent FPL articles" not in context.render()
+
+
 # ------------------------------------------------------------------- building
 
 

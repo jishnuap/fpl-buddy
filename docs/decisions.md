@@ -197,6 +197,65 @@ wording alone did not fix it; a `## Legal captain / vice options` section
 computed from the squad did. Where a constraint can be enforced by only ever
 showing legal choices, do that instead of asking politely.
 
+**Harvested articles are indexed in the brief, never inlined.** The archive
+grows every day; the brief must not. So the brief carries one line per recent
+article -- id, date, headline, tags -- and the agent pulls detail with
+`read_article` / `search_articles` / `articles_about`. Inlining summaries would
+make the per-run token cost a function of how long harvesting has been running,
+which is the wrong thing to make it a function of.
+
+**Feeds first, crawling last.** A feed is the publisher stating what is new, in
+a format that does not change on redesign; one request answers "anything new?"
+for a whole site. Crawling listing pages is the fallback, and if the feeds
+already produced a full run's worth of the newest articles the crawl is skipped
+entirely rather than fetching pages whose results would be trimmed anyway.
+
+`max_depth` defaults to **0** -- the configured roots only -- after the first
+version defaulted to 1 and turned four listing pages into hundreds of requests
+by following every nav, tag and pagination link it found. `max_pages_per_run` is
+the backstop for when a site's link structure defeats the URL patterns anyway.
+Being a good guest matters more here than completeness: this runs against
+someone else's site every single day, unattended.
+
+**No paywall circumvention.** Fantasy Football Scout is freemium: an article
+returns `200` with roughly its first fifth and a signup pitch, and the rest is
+never sent to a logged-out client. No crawler and no headless browser recovers
+it -- rendering JavaScript cannot materialise text the server withheld. The
+only supported way to get the whole thing is `cookie_env`, naming an environment
+variable holding your own subscription cookie, which is authenticated access
+rather than a bypass. Deliberately absent: crawler-UA spoofing, cache and AMP
+endpoints, archive mirrors. Those defeat an access control on someone's
+commercial content, and they break silently besides.
+
+Extraction detects the cut and marks the note `access: partial`, because
+summarising an intro as though it were the analysis is worse than knowing you
+only have the intro.
+
+**Untrusted web text is contained at the summariser, not at the reader.** This
+is the first feature that puts arbitrary web prose into a prompt that drives real
+team decisions, so the boundary is drawn where the text arrives:
+
+- the summariser is asked for a **fixed pydantic schema**, so a page cannot emit
+  anything but `summary`/`key_points`/`player_names`/`tags`. It can still argue
+  for a bad transfer -- which is all any bad tipster can do -- but it cannot
+  issue instructions;
+- **element ids never come from the model.** Names are resolved afterwards
+  against `bootstrap-static`, so an article cannot introduce an id at all;
+- the article text is fenced in the prompt as untrusted, and every rendering
+  (brief section, tool output, stored extract) says so in words;
+- the existing invariants still hold underneath: no write tools, deterministic
+  validation, human approval.
+
+**Player names resolve by token match, not fuzzy score.** The first version used
+`rapidfuzz.WRatio` and attached an article about Coventry's *Raphael Borges
+Rodrigues* to Brentford's *Igor Thiago Nascimento Rodrigues*, because WRatio
+rewards a shared token inside a long name. Now a name resolves only when it is
+unambiguous: a unique exact match, or every mentioned token belonging to exactly
+one player, or a surname only one player answers to. Bare "Palmer" resolves to
+nothing while "Cole Palmer" resolves correctly. Attaching news about a player
+you do not own to one you do is worse than attaching nothing, so ambiguity is
+dropped rather than guessed -- the same reasoning as the projections joiner.
+
 ## Deliberately not done
 
 - **Multi-entry support.** One team, one entry id.

@@ -5,6 +5,10 @@
 .state/
 *.cookies.json
 
+# Your own article-source list. The example is tracked; this one is yours to
+# edit freely (it holds no secrets -- credentials are named env vars).
+sources.yaml
+
 # Environment
 .venv/
 venv/

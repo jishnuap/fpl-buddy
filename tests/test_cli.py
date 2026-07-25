@@ -20,6 +20,7 @@ runner = CliRunner()
 COMMANDS = [
     "login", "verify", "context", "list", "show", "propose",
     "check", "approve", "reject", "amend", "commit", "schedule", "serve",
+    "harvest", "articles",
 ]
 
 
@@ -161,3 +162,43 @@ def test_live_mode_is_announced_loudly(monkeypatch):
     monkeypatch.setattr(cli.Orchestrator, "propose", explode, raising=True)
     result = runner.invoke(app, ["propose"])
     assert "LIVE" in result.output
+
+
+# ----------------------------------------------------------------- knowledge
+
+
+def test_harvest_without_sources_configured_explains_itself():
+    result = runner.invoke(app, ["harvest"])
+    assert result.exit_code != 0
+    assert "KNOWLEDGE_SOURCES_FILE" in result.output
+
+
+def test_articles_says_so_when_the_store_is_empty():
+    result = runner.invoke(app, ["articles"])
+    assert result.exit_code == 0
+    assert "No harvested articles" in result.output
+
+
+def test_the_brief_is_printed_verbatim_not_as_rich_markup(monkeypatch, tmp_path):
+    """Square brackets in the brief are data, not style tags.
+
+    Rich reads `[article-id]` as a markup tag and silently swallows it, which
+    broke the one command whose whole job is to show the brief exactly as the
+    agent will see it. The squad table's `[GKP, id=110]` is exposed to the same
+    thing.
+    """
+    from fpl_buddy import cli
+
+    marker = "[some-article-id] | [GKP, id=110]"
+
+    class _FakeContext:
+        def render(self) -> str:
+            return f"# brief\n{marker}\n"
+
+    monkeypatch.setattr(cli, "build_context", lambda *a, **k: _FakeContext())
+    monkeypatch.setattr(cli, "FPLClient", lambda *a, **k: object())
+
+    result = runner.invoke(app, ["context"])
+    assert result.exit_code == 0
+    assert "some-article-id" in result.output
+    assert "GKP, id=110" in result.output

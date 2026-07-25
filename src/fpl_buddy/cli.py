@@ -16,6 +16,7 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from .approval import review_url
 from .config import Settings, get_settings
@@ -165,7 +166,11 @@ def verify(verbose: bool = False) -> None:
 def context(verbose: bool = False) -> None:
     """Print the exact brief the agent will reason over."""
     settings = _setup(verbose)
-    console.print(build_context(settings, FPLClient(settings)).render())
+    # markup=False: the brief is a prompt, not Rich markup. It is full of square
+    # brackets ("[GKP, id=110]", "[article-id]") that Rich would otherwise try to
+    # read as style tags and silently swallow -- misrepresenting the very thing
+    # this command exists to show verbatim.
+    console.print(build_context(settings, FPLClient(settings)).render(), markup=False)
 
 
 @app.command(name="list")
@@ -219,10 +224,15 @@ def show(
         console.print(f"[bold]Your note:[/] {proposal.human_note}")
     if proposal.execution_error:
         console.print(f"[bold red]Execution error:[/] {proposal.execution_error}")
+    # Same reason as `context`: stored prompt and model text is not Rich markup.
     if brief and proposal.context_snapshot:
-        console.print(Panel(proposal.context_snapshot, title="brief", border_style="dim"))
+        console.print(
+            Panel(Text(proposal.context_snapshot), title="brief", border_style="dim")
+        )
     if transcript and proposal.agent_transcript:
-        console.print(Panel(proposal.agent_transcript, title="agent", border_style="dim"))
+        console.print(
+            Panel(Text(proposal.agent_transcript), title="agent", border_style="dim")
+        )
 
 
 # ------------------------------------------------------------------- the loop
@@ -371,6 +381,87 @@ def schedule(verbose: bool = False) -> None:
         f"  auto-commit {'on' if settings.auto_commit_enabled else 'off'}, "
         f"dry_run {'on' if settings.dry_run else 'off'}"
     )
+
+
+@app.command()
+def harvest(
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Discover and list candidate URLs without fetching or storing."
+    ),
+    verbose: bool = False,
+) -> None:
+    """Collect new articles from the configured sources into the knowledge store."""
+    settings = _setup(verbose)
+    if not settings.has_knowledge:
+        _die("KNOWLEDGE_SOURCES_FILE is not set; there are no sources to harvest.")
+
+    from .knowledge.fetch import Fetcher
+    from .knowledge.harvest import harvest as run_harvest
+    from .knowledge.harvest import knowledge_dir
+    from .knowledge.sources import load_sources
+
+    config = load_sources(settings.knowledge_sources_file)
+    if not config.active:
+        _die(f"No enabled sources in {settings.knowledge_sources_file}.")
+
+    if dry_run:
+        from .knowledge.discover import discover
+        from .knowledge.store import KnowledgeStore
+
+        known = KnowledgeStore(knowledge_dir(settings)).known_urls()
+        fetcher = Fetcher(settings)
+        for source in config.active:
+            candidates = discover(source, fetcher)
+            console.print(f"\n[bold]{source.name}[/bold] -- {len(candidates)} candidate(s)")
+            for candidate in candidates:
+                seen = "[dim]known[/dim]" if candidate.url in known else "[green]new[/green]"
+                when = candidate.published.date().isoformat() if candidate.published else "?"
+                console.print(f"  {seen}  {when}  {candidate.url}")
+        return
+
+    try:
+        bootstrap = FPLClient(settings).bootstrap()
+    except Exception as exc:  # noqa: BLE001 - only used to resolve player names
+        console.print(f"[yellow]Could not load bootstrap ({exc}); skipping id resolution.[/yellow]")
+        bootstrap = None
+
+    report = run_harvest(settings, bootstrap=bootstrap)
+    console.print(f"\n[bold]{report.summary()}[/bold]")
+    console.print(f"Stored in {knowledge_dir(settings)}")
+    for failure in report.failures[:10]:
+        console.print(f"  [yellow]{failure}[/yellow]")
+
+
+@app.command()
+def articles(
+    limit: int = typer.Option(20, help="How many to list."),
+    verbose: bool = False,
+) -> None:
+    """List what is in the knowledge store."""
+    settings = _setup(verbose)
+    from .knowledge.harvest import knowledge_dir
+    from .knowledge.store import KnowledgeStore
+
+    notes = KnowledgeStore(knowledge_dir(settings)).recent(limit=limit)
+    if not notes:
+        console.print("No harvested articles. Run [bold]fpl-buddy harvest[/bold].")
+        return
+
+    table = Table(title=f"Harvested articles ({knowledge_dir(settings)})")
+    table.add_column("published")
+    table.add_column("source")
+    table.add_column("title", overflow="fold")
+    table.add_column("access")
+    table.add_column("players")
+    for note in notes:
+        table.add_row(
+            (note.published or note.retrieved).date().isoformat(),
+            note.source,
+            note.title[:70],
+            note.access,
+            str(len(note.players)),
+        )
+    console.print(table)
 
 
 @app.command()

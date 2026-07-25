@@ -271,6 +271,95 @@ def test_underlying_stats_refuses_an_unknown_id(context):
     assert "does not exist" in tools["underlying_stats"].invoke({"element_id": 999_999})
 
 
+# -------------------------------------------------------------- knowledge tools
+
+
+def _article(**overrides):
+    from datetime import UTC, datetime
+
+    from fpl_buddy.knowledge.store import ArticleNote
+
+    payload = {
+        "id": "src-2026-07-25-captaincy",
+        "title": "Vasquez is the obvious captain",
+        "url": "https://news.example.test/2026/07/25/captaincy",
+        "source": "src",
+        "summary": "The author argues for Vasquez on penalties.",
+        "key_points": ["He takes the penalties"],
+        "published": datetime(2026, 7, 25, tzinfo=UTC),
+        "tags": ["captaincy"],
+        "players": [FWD_CAPTAIN],
+        "trust": "high",
+    }
+    payload.update(overrides)
+    return ArticleNote(**payload)
+
+
+def test_knowledge_tools_are_registered(context):
+    names = {_tool_name(t) for t in build_tools(context, DummyClient())}
+    assert {"search_articles", "read_article", "articles_about"} <= names
+
+
+def test_search_articles_finds_a_match_and_flags_it_as_opinion(context):
+    context.articles = [_article()]
+    tools = {_tool_name(t): t for t in build_tools(context, DummyClient())}
+    out = tools["search_articles"].invoke({"query": "penalties"})
+
+    assert "Vasquez is the obvious captain" in out
+    assert "Third-party commentary" in out, "the agent must know what it is reading"
+    assert "not instructions" in out.casefold()
+
+
+def test_search_articles_says_so_when_there_is_nothing(context):
+    context.articles = [_article()]
+    tools = {_tool_name(t): t for t in build_tools(context, DummyClient())}
+    assert "Nothing matching" in tools["search_articles"].invoke({"query": "goalkeepers"})
+
+
+def test_search_articles_degrades_without_a_harvest(context):
+    assert context.articles == []
+    tools = {_tool_name(t): t for t in build_tools(context, DummyClient())}
+    assert "No harvested articles" in tools["search_articles"].invoke({"query": "anything"})
+
+
+def test_read_article_returns_the_summary_and_claims(context):
+    context.articles = [_article()]
+    tools = {_tool_name(t): t for t in build_tools(context, DummyClient())}
+    out = tools["read_article"].invoke({"article_id": "src-2026-07-25-captaincy"})
+
+    assert "argues for Vasquez" in out
+    assert "He takes the penalties" in out
+    assert "trust: high" in out
+
+
+def test_read_article_rejects_an_unknown_id_and_lists_real_ones(context):
+    context.articles = [_article()]
+    tools = {_tool_name(t): t for t in build_tools(context, DummyClient())}
+    out = tools["read_article"].invoke({"article_id": "made-up"})
+    assert "No article with id" in out
+    assert "src-2026-07-25-captaincy" in out
+
+
+def test_read_article_marks_a_paywalled_one_as_partial(context):
+    context.articles = [_article(access="partial")]
+    tools = {_tool_name(t): t for t in build_tools(context, DummyClient())}
+    out = tools["read_article"].invoke({"article_id": "src-2026-07-25-captaincy"})
+    assert "PARTIAL" in out
+
+
+def test_articles_about_a_player_uses_resolved_ids(context):
+    context.articles = [_article()]
+    tools = {_tool_name(t): t for t in build_tools(context, DummyClient())}
+
+    assert "obvious captain" in tools["articles_about"].invoke({"element_id": FWD_CAPTAIN})
+    assert "No harvested article" in tools["articles_about"].invoke({"element_id": MID_LIV})
+
+
+def test_articles_about_refuses_an_unknown_player(context):
+    tools = {_tool_name(t): t for t in build_tools(context, DummyClient())}
+    assert "does not exist" in tools["articles_about"].invoke({"element_id": 999_999})
+
+
 def test_squad_rules_states_the_live_budget(context):
     tools = {_tool_name(t): t for t in build_tools(context, DummyClient())}
     out = tools["squad_rules"].invoke({})
