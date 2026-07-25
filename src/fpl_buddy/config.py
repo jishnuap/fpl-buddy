@@ -81,6 +81,35 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ------------------------------------------------------------- knowledge
+    knowledge_sources_file: str = Field(
+        default="",
+        description=(
+            "Path to the YAML file listing article sources to harvest. Empty "
+            "disables harvesting entirely."
+        ),
+    )
+    knowledge_harvest_hour: int = Field(
+        default=5,
+        ge=0,
+        le=23,
+        description="Local hour for the daily article harvest.",
+    )
+    knowledge_index_days: int = Field(
+        default=10,
+        ge=1,
+        description="Only articles this recent appear in the brief's index.",
+    )
+    knowledge_index_limit: int = Field(
+        default=15,
+        ge=1,
+        description="Most articles to list in the brief. Detail is loaded by tool.",
+    )
+
+    @property
+    def has_knowledge(self) -> bool:
+        return bool(self.knowledge_sources_file)
+
     # ------------------------------------------------------------ notification
     notify_channel: Literal["none", "smtp", "webhook", "log", "discord"] = "log"
     public_base_url: str = Field(

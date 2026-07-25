@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 PROPOSE_JOB = "propose"
 COMMIT_JOB = "commit"
 ANCHOR_JOB = "reanchor"
+HARVEST_JOB = "harvest"
 
 # How soon after boot to run a propose whose window has already opened.
 CATCH_UP_DELAY = timedelta(minutes=2)
@@ -53,6 +54,20 @@ class FplScheduler:
             replace_existing=True,
             misfire_grace_time=MISFIRE_GRACE_SECONDS,
         )
+        if self.settings.has_knowledge:
+            self.scheduler.add_job(
+                self.run_harvest,
+                CronTrigger(
+                    hour=self.settings.knowledge_harvest_hour, minute=0, timezone=self.timezone
+                ),
+                id=HARVEST_JOB,
+                replace_existing=True,
+                misfire_grace_time=MISFIRE_GRACE_SECONDS,
+            )
+            logger.info(
+                "Article harvest scheduled daily at %02d:00 %s.",
+                self.settings.knowledge_harvest_hour, self.settings.timezone,
+            )
         self.scheduler.start()
         self.reanchor()
         logger.info("Scheduler started (timezone %s).", self.settings.timezone)
@@ -107,6 +122,21 @@ class FplScheduler:
                 logger.info("Commit job left %s in %s.", proposal.id, proposal.status.value)
         except Exception:
             logger.exception("Commit job failed; nothing was submitted.")
+
+    def run_harvest(self) -> None:
+        """Collect new articles. Strictly optional: it must never affect a deadline."""
+        from .knowledge.harvest import harvest
+
+        try:
+            bootstrap = self.orchestrator.client.bootstrap()
+        except Exception as exc:  # noqa: BLE001 - only needed to resolve player names
+            logger.warning("Harvest could not load bootstrap (%s); skipping id resolution.", exc)
+            bootstrap = None
+        try:
+            report = harvest(self.settings, bootstrap=bootstrap)
+            logger.info("Harvest: %s", report.summary())
+        except Exception:
+            logger.exception("Article harvest failed; proposals are unaffected.")
 
     # ----------------------------------------------------------------- private
     def _schedule_propose(

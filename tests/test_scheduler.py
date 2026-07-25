@@ -16,7 +16,7 @@ import pytest
 from fpl_buddy.decisions.store import FileProposalStore
 from fpl_buddy.notify import NullNotifier
 from fpl_buddy.orchestrator import Orchestrator
-from fpl_buddy.scheduler import COMMIT_JOB, PROPOSE_JOB, FplScheduler
+from fpl_buddy.scheduler import COMMIT_JOB, HARVEST_JOB, PROPOSE_JOB, FplScheduler
 
 from .fakes import FakeStructuredModel
 
@@ -203,6 +203,77 @@ def test_run_commit_swallows_failures(scheduler, orch, monkeypatch):
 
     monkeypatch.setattr(orch, "auto_commit", explode)
     scheduler.run_commit()  # must not raise
+
+
+def started_paused(sched: FplScheduler, monkeypatch) -> None:
+    """Run ``FplScheduler.start`` without letting any job body actually fire.
+
+    The scheduler is already running (paused) from the fixture, so the inner
+    ``BackgroundScheduler.start`` is neutralised -- otherwise it raises
+    ``SchedulerAlreadyRunningError`` and we never reach the job registration
+    that these tests are about.
+    """
+    monkeypatch.setattr(sched.scheduler, "start", lambda *a, **k: None)
+    sched.start()
+
+
+def test_no_harvest_job_without_configured_sources(scheduler, settings, monkeypatch):
+    assert not settings.has_knowledge
+    started_paused(scheduler, monkeypatch)
+    assert scheduler.scheduler.get_job(HARVEST_JOB) is None
+
+
+def test_a_harvest_job_is_added_when_sources_are_configured(
+    settings, orch, tmp_path, monkeypatch
+):
+    path = tmp_path / "sources.yaml"
+    path.write_text("sources: []\n")
+    settings.knowledge_sources_file = str(path)
+    settings.knowledge_harvest_hour = 5
+
+    sched = FplScheduler(settings, orchestrator=orch)
+    sched.scheduler.start(paused=True)
+    try:
+        started_paused(sched, monkeypatch)
+        job = sched.scheduler.get_job(HARVEST_JOB)
+        assert job is not None
+        hours = job.trigger.fields[job.trigger.FIELD_NAMES.index("hour")]
+        assert str(hours) == "5"
+    finally:
+        sched.shutdown()
+
+
+def test_run_harvest_swallows_failures(scheduler, monkeypatch, caplog):
+    """Collecting articles is enrichment. It must never cost a deadline."""
+    import fpl_buddy.knowledge.harvest as harvest_module
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("the whole internet is down")
+
+    monkeypatch.setattr(harvest_module, "harvest", explode)
+    scheduler.run_harvest()  # must not raise
+    assert "proposals are unaffected" in caplog.text
+
+
+def test_run_harvest_continues_when_bootstrap_is_unavailable(scheduler, monkeypatch):
+    """Bootstrap is only needed to resolve player names, so losing it degrades
+    the notes rather than skipping the harvest."""
+    import fpl_buddy.knowledge.harvest as harvest_module
+
+    calls: list[object] = []
+
+    def record(settings, *, bootstrap=None, **kwargs):
+        calls.append(bootstrap)
+        return harvest_module.HarvestReport()
+
+    monkeypatch.setattr(harvest_module, "harvest", record)
+    monkeypatch.setattr(
+        scheduler.orchestrator.client, "bootstrap", lambda **kw: (_ for _ in ()).throw(
+            RuntimeError("no network")
+        )
+    )
+    scheduler.run_harvest()
+    assert calls == [None]
 
 
 def test_describe_lists_the_jobs(scheduler, fake_client):
