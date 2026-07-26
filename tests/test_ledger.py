@@ -37,6 +37,44 @@ def test_run_times_and_deadlines_round_trip(ledger):
     assert state.deadline == deadline
 
 
+def test_error_notification_state_round_trips(ledger):
+    when = datetime(2026, 3, 1, 5, 0, tzinfo=UTC)
+    ledger.mark_error_notified("propose: boom", when)
+
+    state = ledger.read()
+    assert state.last_error_signature == "propose: boom"
+    assert state.last_error_notified_at == when
+
+
+def test_a_brand_new_ledger_always_says_notify(ledger):
+    now = datetime(2026, 3, 1, 5, 0, tzinfo=UTC)
+    assert ledger.read().should_notify_error("propose: boom", now=now)
+
+
+def test_a_repeated_error_is_suppressed_within_the_cooldown(ledger):
+    first = datetime(2026, 3, 1, 5, 0, tzinfo=UTC)
+    ledger.mark_error_notified("propose: boom", first)
+
+    later = first + timedelta(minutes=30)
+    assert not ledger.read().should_notify_error("propose: boom", now=later)
+
+
+def test_a_repeated_error_notifies_again_after_the_cooldown(ledger):
+    first = datetime(2026, 3, 1, 5, 0, tzinfo=UTC)
+    ledger.mark_error_notified("propose: boom", first)
+
+    later = first + timedelta(hours=1, seconds=1)
+    assert ledger.read().should_notify_error("propose: boom", now=later)
+
+
+def test_a_different_error_notifies_immediately_even_inside_the_cooldown(ledger):
+    first = datetime(2026, 3, 1, 5, 0, tzinfo=UTC)
+    ledger.mark_error_notified("propose: boom", first)
+
+    moments_later = first + timedelta(seconds=1)
+    assert ledger.read().should_notify_error("commit: different failure", now=moments_later)
+
+
 def test_a_corrupt_file_resets_instead_of_raising(ledger):
     """Losing the ledger costs one redundant fetch. Refusing to run costs a gameweek."""
     ledger.path.write_text("{not json at all")

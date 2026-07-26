@@ -44,6 +44,12 @@ logger = logging.getLogger(__name__)
 # outlives its lease does not fail -- the next tick simply stops waiting for it.
 DEFAULT_LEASE_SECONDS = 15 * 60
 
+# A tick fires every few minutes; without a cooldown, an outage that lasts
+# hours would repeat the identical Discord message every single time. A
+# *different* failure always gets through immediately -- only a repeat is
+# throttled.
+ERROR_RENOTIFY_COOLDOWN = timedelta(hours=1)
+
 
 def _parse(value: str | None) -> datetime | None:
     if not value:
@@ -64,6 +70,8 @@ class LedgerState:
     next_deadline: str = ""
     lease_until: str = ""
     lease_owner: str = ""
+    last_error_signature: str = ""
+    last_error_notified: str = ""
 
     def ran_at(self, job: str) -> datetime | None:
         return _parse(self.last_run.get(job))
@@ -76,6 +84,19 @@ class LedgerState:
     def lease_expires(self) -> datetime | None:
         return _parse(self.lease_until)
 
+    @property
+    def last_error_notified_at(self) -> datetime | None:
+        return _parse(self.last_error_notified)
+
+    def should_notify_error(
+        self, signature: str, *, now: datetime, cooldown: timedelta = ERROR_RENOTIFY_COOLDOWN
+    ) -> bool:
+        """Whether this failure is new enough, or old enough, to say again."""
+        if signature != self.last_error_signature:
+            return True
+        notified_at = self.last_error_notified_at
+        return notified_at is None or now - notified_at >= cooldown
+
     def to_json(self) -> str:
         return json.dumps(
             {
@@ -83,6 +104,8 @@ class LedgerState:
                 "next_deadline": self.next_deadline,
                 "lease_until": self.lease_until,
                 "lease_owner": self.lease_owner,
+                "last_error_signature": self.last_error_signature,
+                "last_error_notified": self.last_error_notified,
             },
             indent=2,
             sort_keys=True,
@@ -96,6 +119,8 @@ class LedgerState:
             next_deadline=str(data.get("next_deadline") or ""),
             lease_until=str(data.get("lease_until") or ""),
             lease_owner=str(data.get("lease_owner") or ""),
+            last_error_signature=str(data.get("last_error_signature") or ""),
+            last_error_notified=str(data.get("last_error_notified") or ""),
         )
 
 
@@ -173,6 +198,12 @@ class JobLedger:
 
     def remember_deadline(self, deadline: datetime | None) -> None:
         self.update(next_deadline=deadline.isoformat() if deadline else "")
+
+    def mark_error_notified(self, signature: str, when: datetime | None = None) -> None:
+        self.update(
+            last_error_signature=signature,
+            last_error_notified=(when or datetime.now(UTC)).isoformat(),
+        )
 
 
 def new_owner() -> str:

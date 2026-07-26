@@ -21,7 +21,8 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 
 from .config import Settings
-from .notify import safe_notify_harvest
+from .ledger import ERROR_RENOTIFY_COOLDOWN
+from .notify import safe_notify_errors, safe_notify_harvest
 from .orchestrator import Orchestrator
 from .schedule import plan_for
 
@@ -46,6 +47,10 @@ class FplScheduler:
         self.orchestrator = orchestrator or Orchestrator(settings)
         self.timezone = ZoneInfo(settings.timezone)
         self.scheduler = BackgroundScheduler(timezone=self.timezone)
+        # job id -> (last signature notified, when). In-memory is enough here:
+        # unlike tick.py this process stays up, so nothing needs to survive a
+        # restart -- and a restart is itself a fresh start worth hearing about.
+        self._last_error: dict[str, tuple[str, datetime]] = {}
 
     # ------------------------------------------------------------------ control
     def start(self) -> None:
@@ -85,6 +90,7 @@ class FplScheduler:
             bootstrap = self.orchestrator.client.bootstrap(refresh=True)
         except Exception as exc:  # noqa: BLE001 - a failed refresh must not kill the loop
             logger.error("Could not refresh bootstrap-static to re-anchor: %s", exc)
+            self._maybe_notify_error(ANCHOR_JOB, f"reanchor: {exc}")
             return
 
         plan = plan_for(bootstrap, self.settings)
@@ -105,16 +111,18 @@ class FplScheduler:
         try:
             proposal = self.orchestrator.propose()
             logger.info("Scheduled propose produced %s.", proposal.id)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - the next tick tries again
             logger.exception("Scheduled propose failed.")
+            self._maybe_notify_error(PROPOSE_JOB, f"propose: {exc}")
 
     def run_commit(self) -> None:
         try:
             proposal = self.orchestrator.auto_commit()
             if proposal is not None:
                 logger.info("Commit job left %s in %s.", proposal.id, proposal.status.value)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 - never retried automatically
             logger.exception("Commit job failed; nothing was submitted.")
+            self._maybe_notify_error(COMMIT_JOB, f"commit: {exc}")
 
     def run_harvest(self) -> None:
         """Collect new articles. Strictly optional: it must never affect a deadline."""
@@ -128,12 +136,24 @@ class FplScheduler:
         try:
             report = harvest(self.settings, bootstrap=bootstrap)
             logger.info("Harvest: %s", report.summary())
-        except Exception:
+        except Exception as exc:  # noqa: BLE001
             logger.exception("Article harvest failed; proposals are unaffected.")
+            self._maybe_notify_error(HARVEST_JOB, f"harvest: {exc}")
             return
         safe_notify_harvest(self.orchestrator.notifier, report, self.settings)
 
     # ----------------------------------------------------------------- private
+    def _maybe_notify_error(self, job_id: str, message: str) -> None:
+        """Say so, once -- a stuck failure must not repost every time it fires."""
+        now = datetime.now(UTC)
+        last = self._last_error.get(job_id)
+        if last is not None:
+            last_message, last_at = last
+            if message == last_message and now - last_at < ERROR_RENOTIFY_COOLDOWN:
+                return
+        self._last_error[job_id] = (message, now)
+        safe_notify_errors(self.orchestrator.notifier, [message], self.settings)
+
     def _schedule_propose(
         self, gameweek: int, propose_at: datetime, commit_at: datetime, now: datetime
     ) -> None:

@@ -118,6 +118,9 @@ def _run(settings: Settings, now: datetime, ledger: JobLedger, orchestrator) -> 
     if harvest_due:
         _harvest(settings, ledger, orchestrator, now, report)
 
+    if report.errors:
+        _notify_errors(settings, ledger, orchestrator, report, now)
+
     return report
 
 
@@ -209,6 +212,19 @@ def _commit(orchestrator, ledger: JobLedger, now: datetime, report: TickReport) 
     report.ran.append(COMMIT)
     if proposal is not None:
         logger.info("Commit left %s in %s.", proposal.id, proposal.status.value)
+
+
+def _notify_errors(
+    settings: Settings, ledger: JobLedger, orchestrator, report: TickReport, now: datetime
+) -> None:
+    """Say so, once -- a stuck failure must not repost every few minutes."""
+    from .notify import safe_notify_errors
+
+    signature = "; ".join(sorted(report.errors))
+    if not ledger.read().should_notify_error(signature, now=now):
+        return
+    safe_notify_errors(orchestrator.notifier, report.errors, settings)
+    ledger.mark_error_notified(signature, now)
 
 
 def _harvest(

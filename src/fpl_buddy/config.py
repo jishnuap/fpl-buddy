@@ -135,6 +135,15 @@ class Settings(BaseSettings):
             "NOTIFY_CHANNEL as proposals. Set false if a daily message is noise."
         ),
     )
+    notify_errors: bool = Field(
+        default=True,
+        description=(
+            "Send a Discord message when a scheduled tick fails (propose, "
+            "commit, harvest, or the deadline refresh). Repeats of the same "
+            "failure are throttled to one message an hour, so an outage does "
+            "not repost every few minutes."
+        ),
+    )
     knowledge_index_days: int = Field(
         default=10,
         ge=1,
@@ -233,6 +242,13 @@ class Settings(BaseSettings):
             "scrolled past."
         ),
     )
+    discord_error_channel_id: int = Field(
+        default=0,
+        description=(
+            "Channel for scheduled-run failures (propose/commit/harvest/refresh). "
+            "Empty means share DISCORD_CHANNEL_ID."
+        ),
+    )
 
     # ------------------------------------------------------------------- data
     solio_url: str = "https://fpl.solioanalytics.com/api/data/latest.json"
@@ -297,6 +313,8 @@ class Settings(BaseSettings):
         """
         if kind == "harvest":
             return self.discord_harvest_channel_id or self.discord_channel_id
+        if kind == "error":
+            return self.discord_error_channel_id or self.discord_channel_id
         return self.discord_channel_id
 
 

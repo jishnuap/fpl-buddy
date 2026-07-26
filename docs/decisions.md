@@ -514,3 +514,23 @@ failure in the fallback itself -- no key, package not installed, the call
 erroring, the response not being JSON -- returns `None` rather than raising, so
 it degrades to exactly the original `403` rather than risking a worse, harder to
 diagnose error in its place.
+
+**A failed tick notifies Discord, throttled by signature rather than by time
+alone.** Both drivers already caught every failure (anchor, propose, commit,
+harvest) and logged it -- but a log line nobody is tailing is the same as no
+notification at all, which is exactly how the Firecrawl and localhost-link bugs
+above went unnoticed for a full day of live testing. The naive fix, notify on
+every failure, does not work for a cron that fires every few minutes: an outage
+that lasts hours would repost the identical message every single tick. So the
+dedup key is the failure text itself, not a timer -- a repeat of the same
+signature is throttled to once an hour, but a *different* failure (a new bug,
+or the old one clearing and a new one starting) always gets through
+immediately, because conflating "already said this" with "already said
+something" would bury the second failure behind the first one's cooldown.
+`tick.py` persists this in the ledger (`last_error_signature` /
+`last_error_notified`) since it is a fresh process every invocation;
+`scheduler.py` keeps the identical check in an in-memory dict keyed by job id,
+since that process is long-lived and a restart is itself worth hearing about
+again from zero. Manual CLI runs (`fpl-buddy propose` typed by hand) are
+deliberately left out -- same reasoning as `harvest --notify` being opt-in: a
+manual run is presumably already being watched.

@@ -150,3 +150,14 @@ def test_an_unknown_kind_lands_in_the_main_channel():
 def test_a_harvest_channel_alone_does_not_make_discord_configured():
     """has_discord still means "can I post proposals", which needs the main one."""
     assert build(discord_harvest_channel_id="456").has_discord is False
+
+
+def test_errors_go_to_their_own_channel_when_one_is_set():
+    s = build(discord_channel_id="123", discord_error_channel_id="789")
+    assert s.discord_channel_for("error") == 789
+    assert s.discord_channel_for("harvest") == 123
+
+
+def test_an_unset_error_channel_shares_the_main_one():
+    s = build(discord_channel_id="123")
+    assert s.discord_channel_for("error") == 123

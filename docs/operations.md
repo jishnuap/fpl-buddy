@@ -124,6 +124,18 @@ On the cron deployment, `fpl-buddy tick` prints what it decided and why —
 "nothing due (next deadline in 3d 4h)" is a healthy answer, and the executions
 list is where a job that never ran shows up as an absence.
 
+**A scheduled run failed.** You shouldn't need to go looking for this — a failed
+propose, commit, harvest, or deadline refresh posts to Discord on its own
+(`NOTIFY_ERRORS=true`, the default), with the same short message that lands in
+the logs (`GET .../bootstrap-static/ failed with 403`, not a full traceback).
+It goes to `DISCORD_ERROR_CHANNEL_ID` if set, otherwise `DISCORD_CHANNEL_ID`.
+
+A failure that repeats every tick is throttled to one message an hour — an
+outage that lasts all afternoon posts once, not every ten minutes — but a
+*different* failure always gets through immediately, even seconds after the
+last one. Turn it off with `NOTIFY_ERRORS=false` if you'd rather rely on the
+logs alone.
+
 **Solio returns 403.** Some networks and proxies block it. Projections are
 optional — the run continues and the brief says they were unavailable.
 

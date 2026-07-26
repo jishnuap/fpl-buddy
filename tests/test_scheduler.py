@@ -16,9 +16,19 @@ import pytest
 from fpl_buddy.decisions.store import FileProposalStore
 from fpl_buddy.notify import NullNotifier
 from fpl_buddy.orchestrator import Orchestrator
-from fpl_buddy.scheduler import COMMIT_JOB, HARVEST_JOB, PROPOSE_JOB, FplScheduler
+from fpl_buddy.scheduler import ANCHOR_JOB, COMMIT_JOB, HARVEST_JOB, PROPOSE_JOB, FplScheduler
 
 from .fakes import FakeStructuredModel
+
+
+class RecordingNotifier:
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, str]] = []
+        self.meta: list[dict | None] = []
+
+    def send(self, subject, text, *, html=None, meta=None) -> None:
+        self.sent.append((subject, text))
+        self.meta.append(meta)
 
 
 @pytest.fixture
@@ -174,6 +184,22 @@ def test_a_failed_bootstrap_leaves_existing_jobs_alone(scheduler, fake_client):
     assert job_times(scheduler) == before, "a transient outage must not unschedule the commit"
 
 
+def test_a_failed_reanchor_notifies_discord(scheduler, orch, fake_client, monkeypatch):
+    notifier = RecordingNotifier()
+    monkeypatch.setattr(orch, "notifier", notifier)
+
+    def explode(*_args, **_kwargs):
+        raise RuntimeError("FPL is down")
+
+    fake_client.bootstrap = explode
+    scheduler.reanchor()
+
+    assert len(notifier.sent) == 1
+    assert "reanchor: FPL is down" in notifier.sent[0][1]
+    assert notifier.meta == [{"kind": "error"}]
+    assert ANCHOR_JOB in scheduler._last_error
+
+
 # -------------------------------------------------------------- job bodies
 
 
@@ -192,6 +218,50 @@ def test_run_propose_swallows_failures(scheduler, orch, monkeypatch):
     scheduler.run_propose()  # must not raise
 
 
+def test_a_failed_propose_notifies_discord(scheduler, orch, monkeypatch):
+    notifier = RecordingNotifier()
+    monkeypatch.setattr(orch, "notifier", notifier)
+    monkeypatch.setattr(orch, "propose", lambda: (_ for _ in ()).throw(RuntimeError("azure is down")))
+
+    scheduler.run_propose()
+
+    assert len(notifier.sent) == 1
+    subject, text = notifier.sent[0]
+    assert subject == "FPL tick failed"
+    assert "propose: azure is down" in text
+    assert notifier.meta == [{"kind": "error"}]
+
+
+def test_a_repeated_scheduler_failure_is_not_renotified_within_the_cooldown(
+    scheduler, orch, monkeypatch
+):
+    notifier = RecordingNotifier()
+    monkeypatch.setattr(orch, "notifier", notifier)
+    monkeypatch.setattr(orch, "propose", lambda: (_ for _ in ()).throw(RuntimeError("azure is down")))
+
+    scheduler.run_propose()
+    scheduler.run_propose()
+
+    assert len(notifier.sent) == 1
+
+
+def test_a_scheduler_failure_notifies_again_after_the_cooldown(scheduler, orch, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    notifier = RecordingNotifier()
+    monkeypatch.setattr(orch, "notifier", notifier)
+    monkeypatch.setattr(orch, "propose", lambda: (_ for _ in ()).throw(RuntimeError("azure is down")))
+
+    scheduler.run_propose()
+    scheduler._last_error[PROPOSE_JOB] = (
+        scheduler._last_error[PROPOSE_JOB][0],
+        datetime.now(UTC) - timedelta(hours=2),
+    )
+    scheduler.run_propose()
+
+    assert len(notifier.sent) == 2
+
+
 def test_run_commit_submits_an_untouched_proposal(scheduler, orch, fake_client):
     orch.propose()
     scheduler.run_commit()
@@ -208,6 +278,19 @@ def test_run_commit_swallows_failures(scheduler, orch, monkeypatch):
 
     monkeypatch.setattr(orch, "auto_commit", explode)
     scheduler.run_commit()  # must not raise
+
+
+def test_a_failed_commit_notifies_discord(scheduler, orch, monkeypatch):
+    notifier = RecordingNotifier()
+    monkeypatch.setattr(orch, "notifier", notifier)
+    monkeypatch.setattr(
+        orch, "auto_commit", lambda: (_ for _ in ()).throw(RuntimeError("FPL rejected it"))
+    )
+
+    scheduler.run_commit()
+
+    assert len(notifier.sent) == 1
+    assert "commit: FPL rejected it" in notifier.sent[0][1]
 
 
 def started_paused(sched: FplScheduler, monkeypatch) -> None:
@@ -258,6 +341,21 @@ def test_run_harvest_swallows_failures(scheduler, monkeypatch, caplog):
     monkeypatch.setattr(harvest_module, "harvest", explode)
     scheduler.run_harvest()  # must not raise
     assert "proposals are unaffected" in caplog.text
+
+
+def test_a_failed_harvest_notifies_discord(scheduler, orch, monkeypatch):
+    import fpl_buddy.knowledge.harvest as harvest_module
+
+    notifier = RecordingNotifier()
+    monkeypatch.setattr(orch, "notifier", notifier)
+    monkeypatch.setattr(
+        harvest_module, "harvest", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+    )
+
+    scheduler.run_harvest()
+
+    assert len(notifier.sent) == 1
+    assert "harvest: boom" in notifier.sent[0][1]
 
 
 def test_run_harvest_continues_when_bootstrap_is_unavailable(scheduler, monkeypatch):
