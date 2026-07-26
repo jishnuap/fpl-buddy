@@ -23,8 +23,8 @@ from fpl_buddy.data.airsenal import (
 
 from .conftest import (
     DEF_INJURED,
-    FREE_MID_NEW,
     FREE_GK_NEW,
+    FREE_MID_NEW,
     FWD_CAPTAIN,
     MID_VICE,
     NEXT_GAMEWEEK,
