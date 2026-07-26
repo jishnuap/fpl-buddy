@@ -86,12 +86,14 @@ class DecisionContext:
                 f"| {player.starts_per_90:>4.2f} | {player.set_piece_duties or '-':<4} "
                 f"| {proj:>5} | {ais:>5} | {role} [{player.position}, id={player.id}]"
             )
-        lines.append(
-            "xGI90 = expected goal involvements per 90. st90 = starts per 90 "
-            "(minutes reliability). setp = set-piece order (P=pens, F=free kicks, C=corners).",
-            "proj = Solio projection for this gameweek. ais = AIrsenal expected points over "
-            "the horizon -- two independent models, so read them together, not as one number "
-            "twice. Where they disagree sharply it is flagged below.",
+        lines.extend(
+            [
+                "xGI90 = expected goal involvements per 90. st90 = starts per 90 "
+                "(minutes reliability). setp = set-piece order (P=pens, F=free kicks, C=corners).",
+                "proj = Solio projection for this gameweek. ais = AIrsenal expected points over "
+                "the horizon -- two independent models, so read them together, not as one number "
+                "twice. Where they disagree sharply it is flagged below.",
+            ]
         )
         return "\n".join(lines)
 
