@@ -257,6 +257,16 @@ URL="$(gcloud run services describe "$SERVICE_NAME" \
   --region "$REGION" --project "$PROJECT" --format 'value(status.url)')"
 deploy_service "$URL"
 
+# The job is what actually posts the Discord notification (the service only
+# serves the approval page it links to), so it needs the same real URL --
+# otherwise every review link it sends is the http://localhost:8080 default,
+# unusable from anywhere but this machine.
+say "Pointing $JOB_NAME at the same approval URL"
+gcloud run jobs update "$JOB_NAME" \
+  --region "$REGION" --project "$PROJECT" \
+  --update-env-vars "PUBLIC_BASE_URL=$URL" \
+  --quiet
+
 # ---------------------------------------------------------------------- done
 cat <<DONE
 
