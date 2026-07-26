@@ -21,6 +21,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 
 from .config import Settings
+from .notify import safe_notify_harvest
 from .orchestrator import Orchestrator
 from .schedule import plan_for
 
@@ -129,6 +130,8 @@ class FplScheduler:
             logger.info("Harvest: %s", report.summary())
         except Exception:
             logger.exception("Article harvest failed; proposals are unaffected.")
+            return
+        safe_notify_harvest(self.orchestrator.notifier, report, self.settings)
 
     # ----------------------------------------------------------------- private
     def _schedule_propose(

@@ -128,6 +128,13 @@ class Settings(BaseSettings):
         le=23,
         description="Local hour for the daily article harvest.",
     )
+    notify_harvest: bool = Field(
+        default=True,
+        description=(
+            "Send a summary of what each daily harvest picked up. Uses the same "
+            "NOTIFY_CHANNEL as proposals. Set false if a daily message is noise."
+        ),
+    )
     knowledge_index_days: int = Field(
         default=10,
         ge=1,

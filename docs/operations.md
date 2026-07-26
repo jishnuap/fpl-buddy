@@ -123,6 +123,20 @@ reads a finite budget and rolls. In a normal one-or-two-transfer week, rolling i
 frequently the correct answer and not a bug; check the proposal's reasoning
 before assuming otherwise.
 
+**The daily harvest summary.** Each harvest posts to `NOTIFY_CHANNEL` — what it
+picked up, one key point per item, its URL, and any source failures. Counts
+alone would only tell you the machinery ran, not whether it found the injury
+news that matters, so the message leads with the articles and puts the
+`6 new from 41 candidates` line underneath.
+
+Failures are always shown, truncated but never hidden: a source that has quietly
+broken looks exactly like a quiet news day otherwise. The article list is capped
+at 12 because Discord rejects a message over 2000 characters outright.
+
+Turn it off with `NOTIFY_HARVEST=false`. Send one on demand with
+`fpl-buddy harvest --notify` — off by default there, because running the harvest
+by hand is usually debugging and a message per attempt trains you to ignore them.
+
 **The harvest collects nothing.** Run `fpl-buddy harvest --dry-run`: it lists
 every candidate URL per source and marks each `new` or `known`. No candidates at
 all usually means the `include_patterns` don't match the site's article URLs —

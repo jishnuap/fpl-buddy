@@ -130,6 +130,22 @@ def safe_notify(notifier: Notifier, proposal: Proposal, settings: Settings) -> N
         )
 
 
+def safe_notify_harvest(notifier: Notifier, report, settings: Settings) -> None:
+    """Send the harvest summary. Doubly best-effort.
+
+    The harvest is already optional enrichment, so a failed message about a
+    failed-tolerant job must not be the thing that raises. Swallowed at WARNING
+    rather than ERROR for that reason: nothing downstream depends on it.
+    """
+    if not settings.notify_harvest:
+        return
+    try:
+        subject, text = render_harvest(report, settings)
+        notifier.send(subject, text, meta={"kind": "harvest"})
+    except Exception as exc:  # noqa: BLE001 - deliberate: notification is best-effort
+        logger.warning("Could not send the harvest summary (%s). The articles are stored.", exc)
+
+
 # --------------------------------------------------------------------- rendering
 
 
@@ -250,3 +266,57 @@ def _html(proposal: Proposal, text: str, url: str) -> str:
 def render_json(proposal: Proposal) -> str:
     """For the webhook channel and for eyeballing state on the CLI."""
     return json.dumps(proposal.model_dump(mode="json"), indent=2)
+
+
+# Discord hard-rejects a message over 2000 characters, and a harvest that picks
+# up thirty videos would sail past that. The cap is on the article list, since
+# that is the only unbounded part.
+HARVEST_ARTICLE_LIMIT = 12
+_KEY_POINT_CHARS = 160
+
+
+def render_harvest(report, settings: Settings) -> tuple[str, str]:
+    """``(subject, plain text)`` for one harvest run.
+
+    Leads with what was found rather than with the counters. A summary that says
+    "6 new article(s) from 41 candidate(s)" tells you the machinery ran; it does
+    not tell you whether it found the injury news you care about.
+    """
+    stored = list(getattr(report, "notes", []) or [])
+    subject = (
+        f"FPL harvest: {report.stored} new "
+        + ("article" if report.stored == 1 else "articles")
+        + (f", {len(report.failures)} failure(s)" if report.failures else "")
+    )
+
+    if not stored:
+        lines = ["Nothing new this time."]
+    else:
+        lines = []
+        for note in stored[:HARVEST_ARTICLE_LIMIT]:
+            kind = "video" if note.kind == "youtube" else "article"
+            gated = " [partial]" if note.access != "full" else ""
+            lines.append(f"* {note.title}")
+            lines.append(f"  {note.source} - {kind}{gated}")
+            # One line of substance per item. The whole point is to be readable
+            # on a phone without opening anything.
+            point = (note.key_points or [note.summary or ""])[0].strip()
+            if point:
+                if len(point) > _KEY_POINT_CHARS:
+                    point = point[: _KEY_POINT_CHARS - 1].rstrip() + "…"
+                lines.append(f"  {point}")
+            lines.append(f"  {note.url}")
+        hidden = len(stored) - HARVEST_ARTICLE_LIMIT
+        if hidden > 0:
+            lines.append(f"...and {hidden} more.")
+
+    lines += ["", report.summary()]
+
+    if report.failures:
+        # Truncated for the same length reason, but never hidden entirely: a
+        # source that has quietly broken looks identical to a quiet news day.
+        lines += ["", "Failures:", *(f"  - {f}" for f in report.failures[:5])]
+        if len(report.failures) > 5:
+            lines.append(f"  ...and {len(report.failures) - 5} more.")
+
+    return subject, "\n".join(lines)
