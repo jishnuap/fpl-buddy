@@ -86,6 +86,18 @@ without the latter, the session cannot survive its 8-hour lifetime.
 tokens rotate on use, so the copy in your environment is spent after the first
 refresh and only the cache holds the live one. Mount a volume.
 
+**`403` on `bootstrap-static` (or any other read), specifically from a cloud
+deployment.** Not the login block above, and not a dead session — this is FPL's
+edge blocking the cloud provider's IP range itself, confirmed live from a Cloud
+Run job. Retrying, refreshing the token, or changing headers does not help,
+because none of those change which network the request comes from. If
+`FIRECRAWL_API_KEY` is set, the client retries the same read through Firecrawl
+automatically and logs `recovered via Firecrawl` on success — nothing to do. If
+it stays a `403`, either the key is unset/wrong, `firecrawl-py` isn't installed
+(`pip install -e '.[firecrawl]'`), or Firecrawl's own fetch failed too — the
+warning logged just before the error names which. Writes never go through this
+fallback; only reads do.
+
 **`verify` passes but the propose job can't read the squad.** Shouldn't happen
 now — `verify` probes `/my-team/`. If you see it, check that `FPL_ENTRY_ID` is
 set, because with no entry id `verify` falls back to `/me/`, which passes on

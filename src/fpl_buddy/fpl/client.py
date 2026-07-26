@@ -2,10 +2,19 @@
 
 Note on CORS: none of the write endpoints are callable from a browser -- FPL's
 CORS policy blocks it. That is fine here; this always runs server-side.
+
+Note on the Firecrawl fallback: FPL's edge (Datadome, in front of Varnish) blocks
+requests from cloud-provider IP ranges outright -- a 403 with no body, regardless
+of headers or cookies, confirmed live against a Cloud Run job. Firecrawl fetches
+through its own IP pool rather than ours, so a read that 403s locally can still
+succeed through it. It is tried for reads only, on a 403 only, and only when
+FIRECRAWL_API_KEY is set and the package is installed -- otherwise this behaves
+exactly as it did before, raising the original error.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -24,6 +33,11 @@ from .models import (
     Player,
     Team,
 )
+
+try:
+    from firecrawl import Firecrawl
+except ImportError:  # pragma: no cover - optional dependency
+    Firecrawl = None
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +59,8 @@ class FPLClient:
         self.auth = authenticator or FPLAuthenticator(settings)
         self._session: SessionCookies | None = None
         self._bootstrap: Bootstrap | None = None
+        # None = not yet tried, False = tried and unavailable, else a live client.
+        self._firecrawl: Any = None
 
     # --------------------------------------------------------------- plumbing
     def _base_headers(self) -> dict[str, str]:
@@ -99,11 +115,19 @@ class FPLClient:
             logger.info("Authorised GET returned %s; refreshing session.", response.status_code)
             self.auth.invalidate()
             self._session = self.auth.get_session_cookies(force_refresh=True)
+            headers = self._auth_headers(referer="https://fantasy.premierleague.com/my-team")
             with httpx.Client(timeout=self.settings.http_timeout_seconds) as client:
-                response = client.get(
-                    url,
-                    headers=self._auth_headers(referer="https://fantasy.premierleague.com/my-team"),
-                )
+                response = client.get(url, headers=headers)
+
+        # A 403 here is not an expired session (that was just handled above) --
+        # every FPL Cloud Run deployment we've tested gets this from a plain,
+        # freshly-authenticated request too. It is FPL's edge blocking the IP
+        # itself, so retrying with different headers never helps; only fetching
+        # from a different network does.
+        if response.status_code == 403:
+            fallback = self._firecrawl_get_json(url, headers=headers)
+            if fallback is not None:
+                return fallback
 
         # 3xx included deliberately: the API answers reads with 200, so a redirect
         # means we've been bounced to a login page, not that there's data here.
@@ -114,6 +138,54 @@ class FPLClient:
                 body=response.text[:1000],
             )
         return response.json()
+
+    def _firecrawl_get_json(self, url: str, *, headers: dict[str, str]) -> Any | None:
+        """Retry a 403'd read through Firecrawl. ``None`` means "could not help".
+
+        Every failure mode here -- no key, package not installed, the API call
+        itself erroring, a non-JSON response -- returns ``None`` rather than
+        raising, so the caller falls through to the original 403. A fallback
+        that could itself crash the request would be worse than no fallback.
+        """
+        if self._firecrawl is None:
+            self._firecrawl = self._build_firecrawl_client()
+        if self._firecrawl is False:
+            return None
+
+        try:
+            document = self._firecrawl.scrape(url, formats=["rawHtml"], headers=headers)
+        except Exception as exc:  # noqa: BLE001 - a failed fallback must not mask the 403
+            logger.warning("Firecrawl fallback for %s failed: %s", url, exc)
+            return None
+
+        raw = getattr(document, "raw_html", None) or getattr(document, "rawHtml", None)
+        if not raw:
+            logger.warning("Firecrawl fallback for %s returned no content.", url)
+            return None
+        try:
+            data = json.loads(raw)
+        except ValueError as exc:
+            logger.warning("Firecrawl fallback for %s returned unparsable content: %s", url, exc)
+            return None
+
+        logger.info("GET %s: 403 direct, recovered via Firecrawl.", url)
+        return data
+
+    def _build_firecrawl_client(self) -> Any:
+        key = self.settings.firecrawl_api_key.get_secret_value()
+        if not key:
+            return False
+        if Firecrawl is None:
+            logger.info(
+                "FPL request got 403 and FIRECRAWL_API_KEY is set, but firecrawl-py is not "
+                "installed (pip install -e '.[firecrawl]'); cannot fall back."
+            )
+            return False
+        try:
+            return Firecrawl(api_key=key)
+        except Exception as exc:  # noqa: BLE001 - never let fallback setup crash the read
+            logger.warning("Could not create a Firecrawl client for the 403 fallback: %s", exc)
+            return False
 
     def _post_json(self, url: str, payload: dict, *, referer: str) -> dict:
         with httpx.Client(
