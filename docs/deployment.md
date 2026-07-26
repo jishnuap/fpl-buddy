@@ -1,8 +1,20 @@
 # Deploying
 
-There is no infrastructure-as-code in this repo. The deliverable is a container
-image on Docker Hub plus the environment contract below; where you run it is
-your call.
+The deliverable is a container image on Docker Hub plus the environment contract
+below; where you run it is your call.
+
+There are two shapes to choose between:
+
+| | This document | [serverless.md](serverless.md) |
+|---|---|---|
+| Shape | One container, always up | Cron job + a web service that idles at zero |
+| Scheduler | In-process | `fpl-buddy tick`, from the platform's cron |
+| Cost | ~£20–28/mo on a managed platform, £0 on a machine you already own | ~£0.50/mo |
+| Discord | Embed with Approve/Amend/Reject buttons, plus passive note capture | Embed with an approval link; no buttons, no note capture |
+| Deploy | `docker run`, below | `./infra/azure/deploy.sh` or `./infra/gcp/deploy.sh` |
+
+Run this one if you have a machine already on. Run the other if you want a cloud
+to host it and would rather not pay for idle.
 
 ## 1. Publish the image
 
@@ -68,10 +80,9 @@ These are not preferences. Break one and the thing silently stops working.
 | **HTTPS in front** | The signed token in the URL is the only credential. Terminate TLS at a proxy or a platform ingress. |
 
 On a platform with scale-to-zero (Cloud Run, Container Apps), pin
-`min=max=1` and CPU always allocated. If you would rather let the platform's
-scheduler drive it — and pay nothing for idle — that means replacing
-`scheduler.py` with authenticated job endpoints; see the note at the end of
-[decisions.md](decisions.md).
+`min=max=1` and CPU always allocated — or use [serverless.md](serverless.md),
+which is the deployment built for exactly that case and lifts every rule in the
+table above except the last three.
 
 ## Environment
 
@@ -265,3 +276,7 @@ always-on container (0.5 vCPU / 1 GiB) runs roughly $25–35/month on a managed
 container platform, or nothing at all on a machine you already pay for. The agent
 itself is one run per gameweek — single-digit dollars per season on a mid-tier
 model.
+
+That instance does about twenty minutes of real work a month, which is what
+[serverless.md](serverless.md) is for: the same image driven by a platform cron,
+at roughly $0.50/month.

@@ -46,10 +46,23 @@ docker run -d --name fpl-buddy --restart unless-stopped \
   youruser/fpl-buddy:0.1.0
 ```
 
-Deployment is manual and host-agnostic — there is no infrastructure-as-code here.
+That container holds the scheduler, so it has to stay up.
 [docs/deployment.md](docs/deployment.md) has the environment contract and the few
 rules any host has to satisfy (one instance, never scaled to zero, durable
 `STATE_DIR`).
+
+If you would rather not pay a cloud for an instance that idles between
+gameweeks, [docs/serverless.md](docs/serverless.md) is the same image driven by a
+platform cron instead — a `fpl-buddy tick` job plus a web service that scales to
+zero, at roughly £0.50/month against ~£24. One script per cloud:
+
+```bash
+IMAGE=youruser/fpl-buddy:0.1.0 ./infra/azure/deploy.sh
+PROJECT=my-project IMAGE=youruser/fpl-buddy:0.1.0 ./infra/gcp/deploy.sh
+```
+
+The tradeoff is Discord's buttons and passive note capture, both of which need a
+gateway connection that would keep the container alive anyway.
 
 ## Authentication
 
@@ -196,9 +209,13 @@ src/fpl_buddy/
   agent/             Azure OpenAI + deepagents, prompts, read-only tools
   orchestrator.py    propose / approve / reject / amend / auto-commit
   api.py             FastAPI + signed one-click approval links
-  scheduler.py       APScheduler, anchored to the real FPL deadline
+  schedule.py        when to propose and commit, derived from the live deadline
+  scheduler.py       APScheduler, for the always-on deployment
+  tick.py            the same schedule as a cron job, for the scale-to-zero one
+  ledger.py          what the tick driver remembers between invocations
   notify.py          log / smtp / webhook / discord channel selection + rendering
-  discord_bot/       gateway bot: embeds, Approve/Amend/Reject buttons, the async bridge
+  discord_bot/       gateway bot: embeds, Approve/Amend/Reject buttons, the async
+                     bridge -- plus a gateway-free notifier for the cron job
   notes.py           notes captured from Discord, folded into the next proposal
   knowledge/         daily article harvest: sources, crawl, extract, summarise,
                      markdown store the agent reads on demand
@@ -206,6 +223,7 @@ src/fpl_buddy/
 ```
 
 Docs: [deployment](docs/deployment.md) ·
+[running it without an always-on container](docs/serverless.md) ·
 [day-to-day operations](docs/operations.md) ·
 [verifying the write payloads](docs/verify-payloads.md) ·
 [decision log](docs/decisions.md)

@@ -21,7 +21,9 @@ structured output come for free, and the graph is still a LangGraph graph if it
 ever needs surgery.
 
 **One always-on replica.** The scheduler is in-process, so a single instance is a
-correctness constraint, not a cost decision.
+correctness constraint, not a cost decision. (Still true of *that* deployment.
+`SCHEDULER_ENABLED=false` plus `fpl-buddy tick` is now the alternative — see
+"Cron ticks instead of a resident scheduler" below.)
 
 **A local `.venv`.** No uv, no global pip.
 
@@ -79,6 +81,14 @@ bicep template and a deploy script; both are gone. Deployment is manual, the
 artifact is a Docker Hub image, and [deployment.md](deployment.md) states the
 environment contract and the constraints any host has to satisfy. One less thing
 to keep in sync with a cloud provider's API version.
+
+`infra/{azure,gcp}/deploy.sh` came back later, and the distinction still holds:
+they are `az` and `gcloud` commands in the order you would type them, not a
+template DSL with a provider version to track. The scale-to-zero shape is a
+dozen interdependent resources — a file share linked to an environment, a
+service account bound to a bucket, a scheduler bound to a job — and writing that
+out by hand from prose was not reasonable. They do not track drift or tear
+anything down, which is the price of not being IaC.
 
 **Publishing is triggered by a tag, not by a merge.** CI builds the image on
 every pull request to prove the Dockerfile works, and pushes nothing. `v*` tags
@@ -362,22 +372,51 @@ dropped rather than guessed -- the same reasoning as the projections joiner.
 - **Mini-league scraping / rank-aware strategy.** Interesting, and a whole
   project of its own.
 
-## The one change that would make idle hosting free
+## Cron ticks instead of a resident scheduler
 
-The in-process scheduler is what forces an always-on instance, and that instance
-is ~98% of the hosting cost — it does about twenty minutes of real work a month.
+The in-process scheduler was what forced an always-on instance, and that instance
+was ~98% of the hosting cost — it does about twenty minutes of real work a month.
+`fpl-buddy tick` is the alternative: a platform cron runs it every ten minutes,
+and each run asks what is due and does it. See [serverless.md](serverless.md).
 
-Moving to a platform scheduler would remove it: authenticated `/jobs/reanchor`,
-`/jobs/propose` and `/jobs/commit` endpoints, a daily cron hitting `reanchor`, and
-`reanchor` reading the live deadline and enqueueing the two precise runs with a
-delayed-task service (Cloud Tasks, or equivalent). Plain cron is not enough on its
-own: FPL deadlines move for international breaks and rescheduled fixtures, which
-is exactly why the scheduler ended up in-process to begin with.
+**Polling, not delayed tasks.** An earlier sketch of this had `reanchor` reading
+the live deadline and enqueueing two precise runs with Cloud Tasks. Polling won
+on failure mode: a dropped enqueue means nothing commits and nothing says so,
+whereas a missed poll costs ten minutes. It also needs no queue service to
+exist. Precision was never worth much here — the commit window is 45 minutes
+wide precisely so it does not need to be hit exactly.
 
-Two consequences to plan for if you do it:
+**Both drivers share `schedule.plan_for()`.** Two implementations of "when does
+the propose window open" would eventually disagree, and the symptom would be one
+deployment behaving differently from the other for reasons no log line explains.
 
-- `STATE_BACKEND=file` stops being viable — nothing on local disk survives, so the
-  store has to be a real database.
-- The on-disk cookie cache in `fpl/auth.py` becomes useless, so `FPL_COOKIE_HEADER`
-  becomes mandatory rather than a fallback. Login-based auth would re-login on
-  every cold start and get rate-limited.
+**Idle ticks must be nearly free, or the cost argument collapses.** Nothing
+above the "nothing due" exit imports the agent stack or touches the network. The
+ledger caches the next deadline so most ticks are one small file read; the live
+deadline is re-read every few hours while it is distant, and every tick once the
+window is close, which is when a moved deadline actually matters.
+
+**One switch governs the scheduler and the Discord gateway.** They are different
+features with one thing in common: each keeps a container alive. Separate
+switches would let you turn off half of it and get a service that still cannot
+idle, having changed nothing about the bill.
+
+**The earlier note here was wrong about state, in both directions.** It said
+`STATE_BACKEND=file` stops being viable and the store has to become a real
+database. In fact both platforms mount a network filesystem onto scale-to-zero
+compute (Azure Files, GCS FUSE), so `file` works unchanged — and `azure_table`
+would not have saved you anyway, because `fpl_cookies.json` sits on `state_dir`
+regardless of the backend. A durable filesystem is required either way, which
+makes it the simpler choice rather than the compromise.
+
+**`EXECUTE_ON_APPROVAL=false` in that deployment, and not as caution.** With two
+processes sharing state, it is the thing that keeps every FPL write inside one
+of them. The refresh token rotates on use, so two concurrent refreshes leave the
+loser holding a dead token; approving through the web service would be exactly
+that if it submitted directly.
+
+**Discord buttons are dropped rather than posted broken.** Without a gateway
+there is nothing listening for the interaction, and a button that silently fails
+when tapped is worse than a link that works. Getting them back means an
+interactions endpoint URL and Ed25519 signature verification, which is a
+feature, not a config change.

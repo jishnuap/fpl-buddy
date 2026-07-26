@@ -71,10 +71,16 @@ this honestly (`Transfers applied but picks failed`). Your squad changed but the
 armband didn't — set the captain in the app. Do not re-run `commit`: it would try
 the transfers again.
 
-**Nothing happened at the deadline.** Check, in order: was the container running
-(scale-to-zero or a crash loop kills the scheduler); did a proposal exist for that
-gameweek (`fpl-buddy list`); was it `pending` (a `rejected` one is left alone);
-is `AUTO_COMMIT_ENABLED=true`.
+**Nothing happened at the deadline.** Check, in order: which scheduler was
+supposed to fire (`curl .../healthz` — `in-process` means the container has to
+have been running, and a crash loop or an unintended scale-to-zero kills it;
+`external` means the cron job has to have fired, so check its execution
+history); did a proposal exist for that gameweek (`fpl-buddy list`); was it
+`pending` (a `rejected` one is left alone); is `AUTO_COMMIT_ENABLED=true`.
+
+On the cron deployment, `fpl-buddy tick` prints what it decided and why —
+"nothing due (next deadline in 3d 4h)" is a healthy answer, and the executions
+list is where a job that never ran shows up as an absence.
 
 **Solio returns 403.** Some networks and proxies block it. Projections are
 optional — the run continues and the brief says they were unavailable.
