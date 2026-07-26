@@ -62,6 +62,33 @@ happily return the same surname at the wrong club — precisely the failure that
 transfers in the wrong player. Unmatched rows are reported to the agent as
 unusable instead.
 
+**A proposal that fails the guardrails is handed back, not just rejected.** The
+first live run of the season came back captaining Haaland — who wasn't in the
+squad — and starting a player it had transferred out in the same proposal. Both
+were caught, so nothing unsafe happened, but the human got an unsubmittable
+proposal and no move.
+
+The prompt already forbade both in bold, and the brief already carried a
+squad-only captain shortlist. Adding a third restatement was not going to work.
+Two things changed instead. The Solio boards now tag every row `[OWNED]` or
+`[not owned]` and call the ownership column `sel %`, because "own 74%" sitting
+next to an element id reads as *you own him*. And `run_agent` re-validates its
+own output: on a fatal issue it continues the same conversation with the exact
+errors plus the fifteen ids the squad will contain **after the agent's own
+transfers**, computed by `resolved_squad_ids`. The failure was arithmetic, so
+the repair hands over the arithmetic rather than the rule.
+
+`AGENT_REPAIR_ATTEMPTS` (default 2) bounds the retries. When they run out the
+invalid proposal is still returned and stored with its issues attached: raising
+would leave the human with nothing to look at, and a flagged bad proposal is
+more useful than silence.
+
+**The captain shortlist admits what it can't know.** It's built before the agent
+decides anything, so it lists players that may be sold and omits players that
+may be bought. It now says so. Presenting a pre-transfer list as the definitive
+set of legal captains is a claim the agent can catch out — and an agent that
+catches the brief lying starts discounting the rest of it.
+
 **`points_hit` is corrected, not rejected.** If the model miscounts the hit, the
 validator overwrites it from the real free-transfer count and records a
 non-fatal issue. The *ceiling* (`MAX_POINTS_HIT`) is what's fatal. A model that's

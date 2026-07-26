@@ -26,7 +26,13 @@ from .conftest import (
     MID_LIV,
     NEXT_GAMEWEEK,
 )
-from .fakes import ONE_TRANSFER_PROPOSAL, FakeStructuredModel
+from .fakes import (
+    CAPTAIN_NOT_OWNED_PROPOSAL,
+    ONE_TRANSFER_PROPOSAL,
+    OVER_BUDGET_PROPOSAL,
+    FakeChangingModel,
+    FakeStructuredModel,
+)
 from .fakes import tool_name as _tool_name
 
 # Any tool name suggesting a write would be a bug; assert on it explicitly.
@@ -539,6 +545,92 @@ def test_agent_without_a_structured_response_is_an_error(context, settings):
 
 def test_build_agent_does_not_need_azure_when_a_model_is_injected(context, settings):
     assert build_agent(context, DummyClient(), settings, model=FakeStructuredModel()) is not None
+
+
+# --------------------------------------------------------------- repair loop
+#
+# The failure these cover happened for real: the agent captained the top row of
+# a league-wide projection board, and separately started a player it had just
+# transferred out. Both were caught by validate() and the human got an
+# unsubmittable proposal. Prompt wording already forbade both, so the fix is a
+# loop that hands the guardrail errors back rather than more words.
+
+
+def test_a_proposal_failing_the_guardrails_is_handed_back_for_repair(context, settings):
+    model = FakeChangingModel(payloads=[CAPTAIN_NOT_OWNED_PROPOSAL, ONE_TRANSFER_PROPOSAL])
+    proposal, _ = run_agent(context, DummyClient(), settings, model=model)
+
+    assert validate(proposal, context, settings) == []
+    assert proposal.captaincy.captain_id == FWD_CAPTAIN
+
+
+def test_the_repair_message_names_the_actual_failure(context, settings):
+    model = FakeChangingModel(payloads=[CAPTAIN_NOT_OWNED_PROPOSAL, ONE_TRANSFER_PROPOSAL])
+    run_agent(context, DummyClient(), settings, model=model)
+
+    repair = next(p for p in model.seen_prompts if "failed the deterministic guardrails" in p)
+    assert f"id {FREE_MID_NEW}) is not in the resulting squad" in repair
+
+
+def test_the_repair_message_spells_out_the_post_transfer_squad(context, settings):
+    """The agent's arithmetic is what failed, so hand it the answer, not the rule."""
+    model = FakeChangingModel(payloads=[CAPTAIN_NOT_OWNED_PROPOSAL, ONE_TRANSFER_PROPOSAL])
+    run_agent(context, DummyClient(), settings, model=model)
+
+    repair = next(p for p in model.seen_prompts if "failed the deterministic guardrails" in p)
+    # The bad proposal transfers nobody, so the resulting squad is the current one.
+    for element_id in context.owned_element_ids():
+        assert f"id={element_id}" in repair
+    assert f"id={FREE_MID_NEW} " not in repair
+
+
+def test_an_overspend_is_sent_back_with_the_sums_not_just_the_verdict(context, settings):
+    """First live run repeated the same overspend three times against a squad-only
+    repair message. Quoting "short by £4.0m" back is not enough to act on."""
+    model = FakeChangingModel(payloads=[OVER_BUDGET_PROPOSAL, ONE_TRANSFER_PROPOSAL])
+    run_agent(context, DummyClient(), settings, model=model)
+
+    repair = next(p for p in model.seen_prompts if "failed the deterministic guardrails" in p)
+    assert "budget across ALL the transfers together" in repair
+    assert "bank" in repair
+    assert "+ sell" in repair and "- buy" in repair
+    assert "OVERSPENT" in repair
+
+
+def test_no_budget_block_when_nothing_is_being_bought(context, settings):
+    model = FakeChangingModel(payloads=[CAPTAIN_NOT_OWNED_PROPOSAL, ONE_TRANSFER_PROPOSAL])
+    run_agent(context, DummyClient(), settings, model=model)
+
+    repair = next(p for p in model.seen_prompts if "failed the deterministic guardrails" in p)
+    assert "budget across ALL the transfers" not in repair
+
+
+def test_a_valid_proposal_is_never_sent_back(context, settings):
+    model = FakeChangingModel(payloads=[ONE_TRANSFER_PROPOSAL])
+    run_agent(context, DummyClient(), settings, model=model)
+
+    assert not any("failed the deterministic guardrails" in p for p in model.seen_prompts)
+
+
+def test_an_unfixable_proposal_still_reaches_the_human_with_its_issues(context, settings):
+    """Raising would show the human nothing. A flagged bad proposal beats silence."""
+    settings.agent_repair_attempts = 1
+    model = FakeChangingModel(payloads=[CAPTAIN_NOT_OWNED_PROPOSAL])
+
+    proposal, _ = run_agent(context, DummyClient(), settings, model=model)
+
+    assert proposal.captaincy.captain_id == FREE_MID_NEW
+    assert [i.code for i in validate(proposal, context, settings)] == ["captain_not_in_squad"]
+
+
+def test_repair_attempts_can_be_switched_off(context, settings):
+    settings.agent_repair_attempts = 0
+    model = FakeChangingModel(payloads=[CAPTAIN_NOT_OWNED_PROPOSAL, ONE_TRANSFER_PROPOSAL])
+
+    proposal, _ = run_agent(context, DummyClient(), settings, model=model)
+
+    assert proposal.captaincy.captain_id == FREE_MID_NEW
+    assert not any("failed the deterministic guardrails" in p for p in model.seen_prompts)
 
 
 # ------------------------------------------------------------- model config

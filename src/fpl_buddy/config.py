@@ -53,6 +53,14 @@ class Settings(BaseSettings):
         default=0,
         description="Hard ceiling on points spent on extra transfers. 0 = never take a hit.",
     )
+    agent_repair_attempts: int = Field(
+        default=2,
+        ge=0,
+        description=(
+            "How many times to hand a failing proposal back to the agent with the exact "
+            "guardrail errors. 0 disables the repair loop."
+        ),
+    )
     auto_commit_enabled: bool = Field(
         default=True,
         description="If false, a proposal that nobody touches simply expires.",

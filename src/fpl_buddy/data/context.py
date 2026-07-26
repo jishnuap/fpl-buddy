@@ -130,14 +130,25 @@ class DecisionContext:
         row = self.solio.projection_for(element_id)
         return f"{row.pr_points:.2f}" if row and row.pr_points is not None else "-"
 
+    def owned_element_ids(self) -> set[int]:
+        """The squad as it stands now, before any proposed transfers."""
+        return {pick.element for pick in self.my_team.picks}
+
     def captain_candidate_lines(self, limit: int = 8) -> list[str]:
-        """Squad-only armband options, best projection first.
+        """Armband options from the *current* squad, best projection first.
 
         This exists because the agent got it wrong in exactly the predictable
         way: the Solio leaderboards below are league-wide and carry ``id=``
         values, so the model captained the best player in the *league* rather
         than the best player it *owns*, and the proposal died on validation.
-        Handing it a pre-filtered, legal shortlist removes the ambiguity.
+
+        Note what this list cannot do. It is computed before the agent decides
+        anything, so it lists players the agent may be about to sell and cannot
+        list players it is about to buy -- both of which are legal-captain
+        changes. Presenting it as the definitive set would be a lie the agent
+        can catch, which is a good way to teach it to ignore the list. It is a
+        starting point; :func:`fpl_buddy.decisions.validate.resolved_squad_ids`
+        is the authority, and the repair loop in the agent runner enforces it.
         """
         rows: list[tuple[float, str]] = []
         for pick in self.my_team.picks:
@@ -220,9 +231,15 @@ class DecisionContext:
         if candidates:
             parts += [
                 "",
-                "## Legal captain / vice options (from YOUR squad only)",
-                "The captain and vice MUST be two different players from this list. Players in "
-                "the projection leaderboards further down are league-wide and mostly NOT yours.",
+                "## Captain / vice options from YOUR CURRENT squad",
+                "The captain and vice MUST be two different players you will own once your "
+                "transfers apply. Players in the projection leaderboards further down are "
+                "league-wide and mostly NOT yours; each row there is tagged [OWNED] or "
+                "[not owned].",
+                "This list is the squad as it stands right now. If you sell someone on it they "
+                "stop being eligible, and anyone you buy becomes eligible even though they are "
+                "not listed here. Work out the armband against the squad you will actually end "
+                "up with.",
                 *candidates,
             ]
 
@@ -258,7 +275,7 @@ class DecisionContext:
             ]
 
         if self.solio is not None:
-            parts += ["", self.solio.render()]
+            parts += ["", self.solio.render(owned=self.owned_element_ids())]
             if self.solio_unmatched:
                 parts += [
                     "",
