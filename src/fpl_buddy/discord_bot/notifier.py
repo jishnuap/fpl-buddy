@@ -32,9 +32,15 @@ class DiscordNotifier(Notifier):
         self.settings = settings
 
     def send(self, subject: str, text: str, *, html: str | None = None, meta: dict | None = None) -> None:
-        """Plain-text fallback. ``notify_proposal`` is the real path -- it posts
-        a formatted embed with buttons instead of calling this."""
-        future = asyncio.run_coroutine_threadsafe(self._send_text(subject, text), self.bot.loop)
+        """Plain-text fallback, and the path the harvest summary takes.
+
+        ``notify_proposal`` is the real path for proposals -- it posts a
+        formatted embed with buttons instead of calling this.
+        """
+        channel_id = self.settings.discord_channel_for((meta or {}).get("kind", ""))
+        future = asyncio.run_coroutine_threadsafe(
+            self._send_text(subject, text, channel_id), self.bot.loop
+        )
         future.result(timeout=SEND_TIMEOUT_SECONDS)
 
     def notify_proposal(self, proposal: Proposal, settings: Settings) -> None:
@@ -42,16 +48,16 @@ class DiscordNotifier(Notifier):
         future.result(timeout=SEND_TIMEOUT_SECONDS)
 
     async def _post(self, proposal: Proposal) -> None:
-        channel = await self._channel()
+        channel = await self._channel(self.settings.discord_channel_id)
         embed = build_embed(proposal, self.settings)
         await send_proposal(channel, embed, result_view(proposal))
 
-    async def _send_text(self, subject: str, text: str) -> None:
-        channel = await self._channel()
+    async def _send_text(self, subject: str, text: str, channel_id: int) -> None:
+        channel = await self._channel(channel_id)
         await channel.send(f"**{subject}**\n{text}")
 
-    async def _channel(self):
-        channel = self.bot.get_channel(self.settings.discord_channel_id)
+    async def _channel(self, channel_id: int):
+        channel = self.bot.get_channel(channel_id)
         if channel is None:
-            channel = await self.bot.fetch_channel(self.settings.discord_channel_id)
+            channel = await self.bot.fetch_channel(channel_id)
         return channel

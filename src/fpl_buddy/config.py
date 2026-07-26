@@ -218,7 +218,20 @@ class Settings(BaseSettings):
     # ---------------------------------------------------------------- discord
     discord_bot_token: SecretStr = Field(default=SecretStr(""))
     discord_channel_id: int = Field(
-        default=0, description="Channel the bot posts proposals and approval buttons to."
+        default=0,
+        description=(
+            "Channel for proposals and approval buttons. Also the only channel the "
+            "gateway bot reads your replies from, so keep it the one you talk in."
+        ),
+    )
+    discord_harvest_channel_id: int = Field(
+        default=0,
+        description=(
+            "Channel for the daily harvest summary. Empty means share "
+            "DISCORD_CHANNEL_ID -- which works, but a daily article digest in the "
+            "channel you approve transfers in is how a deadline notification gets "
+            "scrolled past."
+        ),
     )
 
     # ------------------------------------------------------------------- data
@@ -273,6 +286,18 @@ class Settings(BaseSettings):
     @property
     def has_discord(self) -> bool:
         return bool(self.discord_bot_token.get_secret_value() and self.discord_channel_id)
+
+    def discord_channel_for(self, kind: str) -> int:
+        """Which channel a message of this kind belongs in.
+
+        One place decides, so the gateway notifier and the HTTPS one cannot
+        disagree about where the harvest digest goes. Anything unrecognised
+        lands in the main channel: a message in the wrong channel is a nuisance,
+        a message nowhere is a lost notification.
+        """
+        if kind == "harvest":
+            return self.discord_harvest_channel_id or self.discord_channel_id
+        return self.discord_channel_id
 
 
 @lru_cache

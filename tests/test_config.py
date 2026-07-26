@@ -124,3 +124,29 @@ def test_secrets_do_not_leak_into_the_repr():
     text = repr(settings)
     assert "hunter2" not in text
     assert "sk-secret" not in text
+
+
+# --------------------------------------------------------- discord channels
+
+
+def test_harvest_goes_to_its_own_channel_when_one_is_set():
+    s = build(discord_channel_id="123", discord_harvest_channel_id="456")
+    assert s.discord_channel_for("harvest") == 456
+    assert s.discord_channel_for("") == 123
+
+
+def test_an_unset_harvest_channel_shares_the_main_one():
+    """Adding the setting must not change behaviour for anyone who ignores it."""
+    s = build(discord_channel_id="123")
+    assert s.discord_channel_for("harvest") == 123
+
+
+def test_an_unknown_kind_lands_in_the_main_channel():
+    """Wrong channel is a nuisance; nowhere at all is a lost notification."""
+    s = build(discord_channel_id="123", discord_harvest_channel_id="456")
+    assert s.discord_channel_for("something-new") == 123
+
+
+def test_a_harvest_channel_alone_does_not_make_discord_configured():
+    """has_discord still means "can I post proposals", which needs the main one."""
+    assert build(discord_harvest_channel_id="456").has_discord is False

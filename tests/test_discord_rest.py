@@ -102,3 +102,50 @@ def test_missing_credentials_fail_at_construction_not_at_send(settings):
 
     with pytest.raises(RuntimeError, match="DISCORD_BOT_TOKEN"):
         DiscordRestNotifier(settings)
+
+
+# ------------------------------------------------------------ channel routing
+#
+# A daily article digest landing in the channel you approve transfers in is how
+# a deadline notification gets scrolled past. These pin down which channel wins.
+
+HARVEST_CHANNEL = 111222333
+HARVEST_URL = f"{API_ROOT}/channels/{HARVEST_CHANNEL}/messages"
+
+
+def test_the_harvest_summary_goes_to_its_own_channel(rest_settings):
+    rest_settings.discord_harvest_channel_id = HARVEST_CHANNEL
+    with respx.mock:
+        route = respx.post(HARVEST_URL).mock(return_value=httpx.Response(200))
+        DiscordRestNotifier(rest_settings).send(
+            "FPL harvest: 2 new articles", "...", meta={"kind": "harvest"}
+        )
+    assert route.called
+
+
+def test_proposals_stay_in_the_main_channel_when_harvest_is_split_out(
+    rest_settings, proposal
+):
+    rest_settings.discord_harvest_channel_id = HARVEST_CHANNEL
+    with respx.mock:
+        route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200))
+        DiscordRestNotifier(rest_settings).notify_proposal(proposal, rest_settings)
+    assert route.called
+
+
+def test_an_unset_harvest_channel_falls_back_to_the_main_one(rest_settings):
+    """Existing setups must keep working without touching their config."""
+    rest_settings.discord_harvest_channel_id = 0
+    with respx.mock:
+        route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200))
+        DiscordRestNotifier(rest_settings).send("subject", "body", meta={"kind": "harvest"})
+    assert route.called
+
+
+def test_a_message_of_no_particular_kind_goes_to_the_main_channel(rest_settings):
+    """Wrong channel is a nuisance; nowhere at all is a lost notification."""
+    rest_settings.discord_harvest_channel_id = HARVEST_CHANNEL
+    with respx.mock:
+        route = respx.post(MESSAGES_URL).mock(return_value=httpx.Response(200))
+        DiscordRestNotifier(rest_settings).send("subject", "body")
+    assert route.called

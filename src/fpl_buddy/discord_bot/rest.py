@@ -48,7 +48,8 @@ class DiscordRestNotifier(Notifier):
     # ------------------------------------------------------------------ send
     def send(self, subject: str, text: str, *, html: str | None = None, meta: dict | None = None) -> None:
         body = f"**{subject}**\n{text}"
-        self._post({"content": body[:_CONTENT_LIMIT]})
+        kind = (meta or {}).get("kind", "")
+        self._post({"content": body[:_CONTENT_LIMIT]}, channel_id=self.settings.discord_channel_for(kind))
 
     def notify_proposal(self, proposal: Proposal, settings: Settings) -> None:
         embed = build_embed(proposal, settings).to_dict()
@@ -61,11 +62,11 @@ class DiscordRestNotifier(Notifier):
                 "inline": False,
             }
         )
-        self._post({"embeds": [embed]})
+        self._post({"embeds": [embed]}, channel_id=self.settings.discord_channel_id)
 
     # --------------------------------------------------------------- private
-    def _post(self, payload: dict) -> None:
-        url = f"{API_ROOT}/channels/{self.settings.discord_channel_id}/messages"
+    def _post(self, payload: dict, *, channel_id: int) -> None:
+        url = f"{API_ROOT}/channels/{channel_id}/messages"
         with httpx.Client(timeout=self.settings.http_timeout_seconds) as client:
             response = client.post(
                 url,
@@ -79,4 +80,4 @@ class DiscordRestNotifier(Notifier):
             raise RuntimeError(
                 f"Discord returned {response.status_code}: {response.text[:200]}"
             )
-        logger.info("Posted to Discord channel %s.", self.settings.discord_channel_id)
+        logger.info("Posted to Discord channel %s.", channel_id)

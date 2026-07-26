@@ -99,6 +99,7 @@ short version of what actually matters:
 | `API_KEY` | Set it once the service is on a public URL: read endpoints then require `X-API-Key`. |
 | `STATE_BACKEND`, `STATE_DIR` | `file` + a mounted volume, or `azure_table`. |
 | `NOTIFY_CHANNEL`, `WEBHOOK_URL` / `SMTP_*` / `DISCORD_BOT_TOKEN` + `DISCORD_CHANNEL_ID` | `discord` posts a proposal with Approve/Amend/Reject buttons; see [below](#discord). |
+| `DISCORD_HARVEST_CHANNEL_ID` | Sends the daily article digest somewhere other than the proposal channel. Empty shares one channel. |
 | `FIXTURE_HORIZON_GAMEWEEKS` | How many gameweeks of fixtures the agent sees (default 5). One extra request per run; degrades to the current gameweek if it fails. |
 | `KNOWLEDGE_SOURCES_FILE` | Path to the article-source YAML. Empty disables harvesting. Mount the file into the container. See [below](#harvesting-articles). |
 | `KNOWLEDGE_HARVEST_HOUR`, `KNOWLEDGE_INDEX_DAYS`, `KNOWLEDGE_INDEX_LIMIT` | When the daily harvest runs, and how much of the archive reaches the brief. |
@@ -178,6 +179,20 @@ you. A 📝 reaction on your message confirms it was captured.
 4. In Discord, enable **Developer Mode** (User Settings → Advanced), right
    click the channel you want proposals (and notes) in → **Copy Channel ID** →
    set `DISCORD_CHANNEL_ID`.
+5. Optionally repeat for a second channel and set `DISCORD_HARVEST_CHANNEL_ID`,
+   which the daily article digest goes to instead.
+
+### Why two channels
+
+The two messages want opposite things from you. A proposal is time-critical and
+needs a decision inside the review window; the harvest digest is reading
+material you get to whenever. Put them together and the digest arrives every
+single morning while proposals arrive once a week — which trains you to swipe
+the notification away, on the one channel where that is expensive.
+
+`DISCORD_CHANNEL_ID` stays the channel the bot **reads** from, so notes you type
+still have to go there. Leaving `DISCORD_HARVEST_CHANNEL_ID` empty shares one
+channel for both, which is exactly what happened before this setting existed.
 
 The bot is a persistent gateway connection living inside this same process
 (same "one always-on replica" constraint as the scheduler -- see
