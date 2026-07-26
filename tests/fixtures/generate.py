@@ -300,6 +300,68 @@ def solio():
     return snapshot, expected
 
 
+# (element_id, {gameweek: predicted points}). Values are arbitrary but fixed --
+# tests assert on them. 620 is deliberately missing GW6: AIrsenal emits nothing
+# for a blank, and "absent" has to stay distinguishable from "predicted zero".
+AIRSENAL_ROWS = [
+    (240, {3: 7.4, 4: 6.81, 5: 5.02, 6: 6.11}),
+    (130, {3: 4.9, 4: 5.44, 5: 4.87, 6: 3.9}),
+    (630, {3: 3.1, 4: 5.2, 5: 5.4, 6: 4.8}),
+    (330, {3: 4.2, 4: 3.31, 5: 3.9, 6: 4.4}),
+    (320, {3: 3.8, 4: 1.02, 5: 1.1, 6: 2.9}),
+    (110, {3: 3.9, 4: 4.12, 5: 3.88, 6: 4.01}),
+    (433, {3: 2.9, 4: 4.6, 5: 4.9, 6: 5.2}),
+    (620, {4: 4.4, 5: 3.9}),
+]
+
+
+def airsenal():
+    """What the sidecar container writes to the shared volume.
+
+    Names, clubs and positions come from the same player table as everything
+    else, so the artefact cannot describe a player the bootstrap does not have.
+    GW3 is included on purpose: it is already played by GW4, and the reader has
+    to slice it off rather than sum it into a horizon total.
+    """
+    players = []
+    for element_id, points in AIRSENAL_ROWS:
+        source = BY_ID[element_id]
+        club = next(t for t in TEAMS if t[0] == source["team"])
+        players.append(
+            {
+                "element_id": element_id,
+                "name": source["web_name"],
+                "team": club[2],
+                "position": POSITION_NAME[source["element_type"]],
+                "points": {str(gw): pts for gw, pts in sorted(points.items())},
+            }
+        )
+    players.sort(key=lambda p: -sum(p["points"].values()))
+
+    return {
+        "schema_version": 1,
+        # Rewritten relative to now by tests/conftest.py: the reader drops
+        # anything older than AIRSENAL_MAX_AGE_HOURS, so a fixed timestamp here
+        # would turn a passing suite into a failing one after 36 hours.
+        "generated_at": "2026-01-01T04:00:00+00:00",
+        "airsenal_version": "1.15.0",
+        "season": "2627",
+        "prediction_tag": "AIrsenal_2627_testtag",
+        "gameweeks": [3, 4, 5, 6],
+        "players": players,
+        "transfer_plan": {
+            "timestamp": "2026-01-01T04:31:02",
+            "points_gain": 4.31,
+            "chip_played": None,
+            "squad_source": "public_api_last_published",
+            "moves": [{"gameweek": 4, "in": [630], "out": [320]}],
+        },
+        # Never carries an id. A player AIrsenal could not map to an FPL element
+        # must be unproposable, not guessed at.
+        "unmatched": ["Ghost Player (AIrsenal player_id 9999, no fpl_api_id)"],
+    }
+
+
 def fixtures():
     # GW4: three matches among the six clubs.
     pairs = [(1, 2), (3, 4), (5, 6)]
@@ -353,6 +415,7 @@ for name, payload in (
     ("fixtures-future.json", future_fixtures()),
     ("solio-latest.json", snapshot),
     ("solio-expected-join.json", expected_join),
+    ("airsenal-predictions.json", airsenal()),
 ):
     (OUT / name).write_text(json.dumps(payload, indent=2) + "\n")
     print("wrote", name)

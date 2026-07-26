@@ -1,76 +1,129 @@
 {
- "schema_version": 1,
- "generated_at": "2026-01-01T04:00:00+00:00",
- "airsenal_version": "1.15.0",
- "season": "2627",
- "prediction_tag": "AIrsenal_2627_testtag",
- "gameweeks": [3, 4, 5, 6],
- "players": [
-  {
-   "element_id": 240,
-   "name": "Vasquez",
-   "team": "MCI",
-   "position": "FWD",
-   "points": {"3": 7.4, "4": 6.81, "5": 5.02, "6": 6.11}
+  "schema_version": 1,
+  "generated_at": "2026-01-01T04:00:00+00:00",
+  "airsenal_version": "1.15.0",
+  "season": "2627",
+  "prediction_tag": "AIrsenal_2627_testtag",
+  "gameweeks": [
+    3,
+    4,
+    5,
+    6
+  ],
+  "players": [
+    {
+      "element_id": 240,
+      "name": "Vasquez",
+      "team": "MCI",
+      "position": "FWD",
+      "points": {
+        "3": 7.4,
+        "4": 6.81,
+        "5": 5.02,
+        "6": 6.11
+      }
+    },
+    {
+      "element_id": 130,
+      "name": "Hollis",
+      "team": "ARS",
+      "position": "MID",
+      "points": {
+        "3": 4.9,
+        "4": 5.44,
+        "5": 4.87,
+        "6": 3.9
+      }
+    },
+    {
+      "element_id": 630,
+      "name": "Abbott",
+      "team": "NEW",
+      "position": "MID",
+      "points": {
+        "3": 3.1,
+        "4": 5.2,
+        "5": 5.4,
+        "6": 4.8
+      }
+    },
+    {
+      "element_id": 433,
+      "name": "Kelsall",
+      "team": "TOT",
+      "position": "MID",
+      "points": {
+        "3": 2.9,
+        "4": 4.6,
+        "5": 4.9,
+        "6": 5.2
+      }
+    },
+    {
+      "element_id": 110,
+      "name": "Abbott",
+      "team": "ARS",
+      "position": "GKP",
+      "points": {
+        "3": 3.9,
+        "4": 4.12,
+        "5": 3.88,
+        "6": 4.01
+      }
+    },
+    {
+      "element_id": 330,
+      "name": "Hollis",
+      "team": "LIV",
+      "position": "MID",
+      "points": {
+        "3": 4.2,
+        "4": 3.31,
+        "5": 3.9,
+        "6": 4.4
+      }
+    },
+    {
+      "element_id": 320,
+      "name": "Corrigan",
+      "team": "LIV",
+      "position": "DEF",
+      "points": {
+        "3": 3.8,
+        "4": 1.02,
+        "5": 1.1,
+        "6": 2.9
+      }
+    },
+    {
+      "element_id": 620,
+      "name": "Corrigan",
+      "team": "NEW",
+      "position": "DEF",
+      "points": {
+        "4": 4.4,
+        "5": 3.9
+      }
+    }
+  ],
+  "transfer_plan": {
+    "timestamp": "2026-01-01T04:31:02",
+    "points_gain": 4.31,
+    "chip_played": null,
+    "squad_source": "public_api_last_published",
+    "moves": [
+      {
+        "gameweek": 4,
+        "in": [
+          630
+        ],
+        "out": [
+          320
+        ]
+      }
+    ]
   },
-  {
-   "element_id": 130,
-   "name": "Hollis",
-   "team": "ARS",
-   "position": "MID",
-   "points": {"3": 4.9, "4": 5.44, "5": 4.87, "6": 3.9}
-  },
-  {
-   "element_id": 630,
-   "name": "Abbott",
-   "team": "NEW",
-   "position": "MID",
-   "points": {"3": 3.1, "4": 5.2, "5": 5.4, "6": 4.8}
-  },
-  {
-   "element_id": 330,
-   "name": "Okafor",
-   "team": "LIV",
-   "position": "MID",
-   "points": {"3": 4.2, "4": 3.31, "5": 3.9, "6": 4.4}
-  },
-  {
-   "element_id": 320,
-   "name": "Nunes",
-   "team": "LIV",
-   "position": "DEF",
-   "points": {"3": 3.8, "4": 1.02, "5": 1.1, "6": 2.9}
-  },
-  {
-   "element_id": 110,
-   "name": "Abbott",
-   "team": "ARS",
-   "position": "GKP",
-   "points": {"3": 3.9, "4": 4.12, "5": 3.88, "6": 4.01}
-  },
-  {
-   "element_id": 433,
-   "name": "Kelsall",
-   "team": "TOT",
-   "position": "MID",
-   "points": {"3": 2.9, "4": 4.6, "5": 4.9, "6": 5.2}
-  },
-  {
-   "element_id": 620,
-   "name": "Pryce",
-   "team": "NEW",
-   "position": "DEF",
-   "points": {"4": 4.4, "5": 3.9}
-  }
- ],
- "transfer_plan": {
-  "timestamp": "2026-01-01T04:31:02",
-  "points_gain": 4.31,
-  "chip_played": null,
-  "squad_source": "public_api_last_published",
-  "moves": [
-   {"gameweek": 4, "in": [630], "out": [320]}
+  "unmatched": [
+    "Ghost Player (AIrsenal player_id 9999, no fpl_api_id)"
   ]
- },
- "unmatched": ["Ghost Player (AIrsenal player_id 9999, no fpl_api_id)"]
 }
