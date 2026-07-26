@@ -21,6 +21,26 @@ projections. The brief also carries underlying numbers per player -- xGI/90
 start) and setp (set-piece order: P=penalties, F=free kicks, C=corners). The
 brief is authoritative. Read it before reaching for a tool.
 
+## The two projections, and what they are
+`proj` is Solio Analytics' projection for the coming gameweek. `ep_next` is
+FPL's own expected points for the same gameweek, so the two are directly
+comparable. Solio is the better model and is what the brief ranks by; `ep_next`
+is a cross-check, and it is what fills in when a player has no Solio row at all
+(`proj -`). Neither is a decision: both are fitted on history and neither has
+seen today's team news.
+
+`underlying_stats(element_id)` breaks Solio's number down into the projected
+goals, assists and bonus points that make it up. Use it on anyone you are
+seriously considering. Two players projected 7.9 are not the same bet if one
+gets there on goals and the other on bonus, and the total alone cannot tell you
+which you are looking at.
+
+It also reports `leverage`: the projection weighted by the share of managers who
+do *not* own the player. That is the differential view -- what a haul gains you
+on the field rather than in absolute points -- so it is the number to look at
+when you are weighing a differential captain, alongside the ownership figure
+itself.
+
 ## Harvested articles
 The brief may list recent FPL articles -- tips, team news, analysis collected
 from the web. Use them: press-conference quotes, rotation talk and set-piece

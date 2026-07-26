@@ -355,9 +355,39 @@ def build_tools(
             f"transfers in {player.transfers_in_event:,} / out {player.transfers_out_event:,} "
             f"this gameweek",
         ]
-        projection = context.projection_value(element_id)
-        if projection is not None:
-            lines.append(f"  Solio:      proj {projection:.2f}")
+        row = context.projection_row(element_id)
+        if row is not None and row.pr_points is not None:
+            lines.append(f"  Solio:      proj {row.pr_points:.2f}")
+            # The decomposition of that projection. Two players on the same
+            # total are not the same case -- one projected on goals is a
+            # different captaincy argument from one leaning on bonus -- and the
+            # total alone hides which you are looking at.
+            #
+            # These are projected *totals for this gameweek*, not the per-90
+            # rates on the "Attacking" line above, so they say so.
+            parts = [
+                f"{value:.2f} {label}"
+                for label, value in (
+                    ("goals", row.pr_goals),
+                    ("assists", row.pr_assists),
+                    ("bonus pts", row.pr_bonus),
+                )
+                if value is not None
+            ]
+            if parts:
+                lines.append("              of which, projected this gameweek: " + ", ".join(parts))
+            if row.captain_proj_points is not None:
+                lines.append(f"              captaincy projection {row.captain_proj_points:.2f}")
+            if row.leverage is not None:
+                # prPoints x (1 - ownership/100): the projection weighted by the
+                # share of managers who do not own him, i.e. what you gain on
+                # the field rather than in absolute points. High means the
+                # points count for more in rank terms.
+                lines.append(
+                    f"              leverage {row.leverage:.2f} "
+                    f"(projected points weighted by the {100 - (row.ownership or 0.0):.0f}% "
+                    "of managers who do not own him)"
+                )
         return "\n".join(lines)
 
     @tool

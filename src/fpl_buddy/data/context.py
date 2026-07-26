@@ -16,7 +16,7 @@ from ..config import Settings
 from ..fpl.client import FPLClient
 from ..fpl.models import Bootstrap, Fixture, Gameweek, MyTeam
 from ..knowledge.store import ArticleNote
-from .solio import SolioClient, SolioSnapshot, join_to_elements
+from .solio import SolioClient, SolioPlayer, SolioSnapshot, join_to_elements
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +178,18 @@ class DecisionContext:
             return None
         row = self.solio.projection_for(element_id)
         return row.pr_points if row and row.pr_points is not None else None
+
+    def projection_row(self, element_id: int) -> SolioPlayer | None:
+        """The whole Solio row, for callers that want more than the total.
+
+        ``projection_value`` returns ``prPoints`` alone, which is all the brief
+        has room for. Solio also sends the decomposition -- projected goals,
+        assists and bonus -- and two players on the same total for different
+        reasons are not the same captaincy case.
+        """
+        if self.solio is None:
+            return None
+        return self.solio.projection_for(element_id)
 
     def article_index_lines(self) -> list[str]:
         """One line per harvested article -- a menu, not the content."""

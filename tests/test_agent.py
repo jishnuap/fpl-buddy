@@ -19,6 +19,7 @@ from fpl_buddy.decisions.schema import AgentProposal
 from fpl_buddy.decisions.validate import validate
 
 from .conftest import (
+    DEF_INJURED,
     FREE_MID_ARS,
     FREE_MID_NEW,
     FWD_CAPTAIN,
@@ -275,6 +276,52 @@ def test_underlying_stats_reports_the_opta_numbers(context):
 def test_underlying_stats_refuses_an_unknown_id(context):
     tools = {_tool_name(t): t for t in build_tools(context, DummyClient())}
     assert "does not exist" in tools["underlying_stats"].invoke({"element_id": 999_999})
+
+
+def test_underlying_stats_breaks_the_solio_projection_down(context, solio):
+    """The total hides which bet you are making.
+
+    Solio sends the decomposition and it used to be parsed and dropped. Two
+    players projected the same are not the same captaincy case if one gets
+    there on goals and the other on bonus.
+    """
+    context.solio = solio
+    tools = {_tool_name(t): t for t in build_tools(context, DummyClient())}
+    out = tools["underlying_stats"].invoke({"element_id": FWD_CAPTAIN})
+
+    assert "proj 7.90" in out
+    assert "0.42 goals" in out
+    assert "0.21 assists" in out
+    assert "0.80 bonus pts" in out
+    # Labelled as gameweek totals, so they are not read as the per-90 rates on
+    # the line above.
+    assert "projected this gameweek" in out
+
+
+def test_underlying_stats_reports_captaincy_and_leverage(context, solio):
+    """`leverage` is prPoints x (1 - ownership/100) -- the differential view.
+
+    Verified against live Solio data: the correlation with that expression is
+    1.000. It is reported with the ownership share spelled out so the agent is
+    not left to infer what the bare number means.
+    """
+    context.solio = solio
+    tools = {_tool_name(t): t for t in build_tools(context, DummyClient())}
+    out = tools["underlying_stats"].invoke({"element_id": FWD_CAPTAIN})
+
+    assert "captaincy projection 15.01" in out
+    assert "leverage 1.40" in out
+    # 71.4% own him, so 29% do not.
+    assert "29%" in out
+
+
+def test_underlying_stats_survives_a_player_solio_has_no_row_for(context, solio):
+    """Solio ships leaderboards, not a full table -- most players are absent."""
+    context.solio = solio
+    tools = {_tool_name(t): t for t in build_tools(context, DummyClient())}
+    out = tools["underlying_stats"].invoke({"element_id": DEF_INJURED})
+    assert "does not exist" not in out
+    assert "Solio" not in out, "no row means no Solio section, not a zeroed one"
 
 
 # -------------------------------------------------------------- knowledge tools
