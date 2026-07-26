@@ -40,6 +40,10 @@ class HarvestReport:
     pruned: int = 0
     failures: list[str] = field(default_factory=list)
     by_backend: dict[str, int] = field(default_factory=dict)
+    # What was actually picked up, not just how much of it. Counts answer "did
+    # the harvest work"; this answers "is it finding anything worth reading",
+    # which is the question a summary in your pocket is really for.
+    notes: list[ArticleNote] = field(default_factory=list)
 
     def summary(self) -> str:
         backends = ", ".join(f"{n}:{c}" for n, c in sorted(self.by_backend.items()))
@@ -203,6 +207,7 @@ def _harvest_source(
         store.save(note)
         known[candidate.url] = digest
         report.stored += 1
+        report.notes.append(note)
         logger.info("Stored %s (%s).", note.id, access)
 
 

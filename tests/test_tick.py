@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from fpl_buddy.knowledge.harvest import HarvestReport
 from fpl_buddy.ledger import JobLedger, LedgerState
 from fpl_buddy.schedule import plan_for
 from fpl_buddy.tick import ANCHOR, COMMIT, HARVEST, PROPOSE, run_tick
@@ -28,11 +29,20 @@ class FakeClient:
         return self._bootstrap
 
 
+class RecordingNotifier:
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, str]] = []
+
+    def send(self, subject, text, *, html=None, meta=None) -> None:
+        self.sent.append((subject, text))
+
+
 class FakeOrchestrator:
     """Records what was asked of it. Nothing here touches FPL or a model."""
 
     def __init__(self, bootstrap, *, existing=None):
         self.client = FakeClient(bootstrap)
+        self.notifier = RecordingNotifier()
         self.proposed = 0
         self.committed = 0
         self._existing = existing
@@ -261,13 +271,15 @@ def test_harvest_runs_once_a_day_at_or_after_its_hour(bootstrap, settings, ledge
     runs = []
     monkeypatch.setattr(
         "fpl_buddy.knowledge.harvest.harvest",
-        lambda *a, **k: runs.append(1) or type("R", (), {"summary": lambda self: "ok"})(),
+        lambda *a, **k: runs.append(1) or HarvestReport(considered=3, stored=1),
     )
 
     # 07:00 local, well clear of both the propose and commit windows.
     morning = datetime(2026, 1, 5, 7, 0, tzinfo=zone).astimezone(UTC)
-    report = run_tick(settings, now=morning, ledger=ledger, orchestrator=FakeOrchestrator(bootstrap))
+    orchestrator = FakeOrchestrator(bootstrap)
+    report = run_tick(settings, now=morning, ledger=ledger, orchestrator=orchestrator)
     assert HARVEST in report.ran
+    assert len(orchestrator.notifier.sent) == 1
 
     # Same day, later tick: already done.
     again = run_tick(

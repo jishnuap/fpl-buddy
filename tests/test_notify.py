@@ -14,14 +14,19 @@ from pydantic import SecretStr
 from fpl_buddy.approval import make_token, read_token
 from fpl_buddy.decisions.schema import ProposalStatus
 from fpl_buddy.decisions.validate import validate
+from fpl_buddy.knowledge.harvest import HarvestReport
+from fpl_buddy.knowledge.store import ArticleNote
 from fpl_buddy.notify import (
     LogNotifier,
+    Notifier,
     NullNotifier,
     SmtpNotifier,
     WebhookNotifier,
     build_notifier,
+    render_harvest,
     render_proposal,
     safe_notify,
+    safe_notify_harvest,
 )
 
 from .conftest import (
@@ -35,6 +40,16 @@ from .conftest import (
 
 def stored(context, **overrides):
     return make_stored(make_proposal(), context, **overrides)
+
+
+class RecordingNotifier(Notifier):
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, str]] = []
+        self.meta: list[dict | None] = []
+
+    def send(self, subject, text, *, html=None, meta=None) -> None:
+        self.sent.append((subject, text))
+        self.meta.append(meta)
 
 
 # ------------------------------------------------------------------- rendering
@@ -284,3 +299,97 @@ def test_a_rejected_proposal_states_that_it_is_over(context, settings):
     proposal = stored(context, status=ProposalStatus.REJECTED)
     _subject, text, _html = render_proposal(proposal, settings)
     assert "Nothing further will happen" in text
+
+
+# --------------------------------------------------------------- harvest summary
+#
+# The harvest runs daily and silently. Counts alone ("6 new from 41 candidates")
+# tell you the machinery ran; they do not tell you whether it found the injury
+# news you care about. These pin down that the message leads with the articles.
+
+
+def note(**overrides) -> ArticleNote:
+    defaults = dict(
+        id="ffs-2026-07-25-abc",
+        title="Five players to watch in GW1",
+        url="https://example.com/gw1",
+        source="fantasy-football-scout",
+        summary="A long-winded overview of the opening weekend.",
+        key_points=["Mosquera is nailed at left-back."],
+    )
+    return ArticleNote(**{**defaults, "id": overrides.pop("id", defaults["id"]), **overrides})
+
+
+def test_the_summary_leads_with_the_articles_not_the_counters(settings):
+    report = HarvestReport(considered=41, stored=1, notes=[note()])
+    subject, text = render_harvest(report, settings)
+
+    assert "1 new article" in subject
+    assert text.index("Five players to watch") < text.index("41 candidate")
+    assert "Mosquera is nailed at left-back." in text
+    assert "https://example.com/gw1" in text
+
+
+def test_a_quiet_day_says_so_plainly(settings):
+    subject, text = render_harvest(HarvestReport(considered=12), settings)
+
+    assert "0 new articles" in subject
+    assert "Nothing new this time." in text
+
+
+def test_videos_and_paywalled_articles_are_labelled(settings):
+    report = HarvestReport(
+        stored=2,
+        notes=[
+            note(id="a", kind="youtube", title="GW1 team reveal"),
+            note(id="b", access="partial", title="Members-only preview"),
+        ],
+    )
+    _subject, text = render_harvest(report, settings)
+
+    assert "video" in text
+    assert "[partial]" in text
+
+
+def test_a_huge_harvest_is_capped_so_discord_accepts_it(settings):
+    """Discord rejects anything over 2000 characters outright."""
+    notes = [note(id=f"n{i}", title=f"Article number {i}") for i in range(40)]
+    _subject, text = render_harvest(HarvestReport(stored=40, notes=notes), settings)
+
+    assert "...and 28 more." in text
+    assert len(text) < 2000
+
+
+def test_failures_are_always_surfaced(settings):
+    """A source that quietly broke looks exactly like a quiet news day."""
+    report = HarvestReport(stored=0, failures=[f"source-{i} timed out" for i in range(8)])
+    subject, text = render_harvest(report, settings)
+
+    assert "8 failure(s)" in subject
+    assert "source-0 timed out" in text
+    assert "...and 3 more." in text
+
+
+def test_the_summary_can_be_switched_off(settings):
+    settings.notify_harvest = False
+    notifier = RecordingNotifier()
+
+    safe_notify_harvest(notifier, HarvestReport(stored=3, notes=[note()]), settings)
+
+    assert notifier.sent == []
+
+
+def test_a_dead_notifier_never_takes_the_harvest_down(settings):
+    """Best-effort twice over: the harvest itself is optional enrichment."""
+    class Broken(Notifier):
+        def send(self, subject, text, *, html=None, meta=None):
+            raise RuntimeError("discord is on fire")
+
+    safe_notify_harvest(Broken(), HarvestReport(stored=1, notes=[note()]), settings)
+
+
+def test_the_summary_is_tagged_so_a_webhook_can_route_it(settings):
+    notifier = RecordingNotifier()
+    safe_notify_harvest(notifier, HarvestReport(stored=1, notes=[note()]), settings)
+
+    assert notifier.meta == [{"kind": "harvest"}]

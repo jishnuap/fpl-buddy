@@ -236,6 +236,10 @@ def _harvest(
     report.ran.append(HARVEST)
     logger.info("Harvest: %s", result.summary())
 
+    from .notify import safe_notify_harvest
+
+    safe_notify_harvest(orchestrator.notifier, result, settings)
+
 
 # ------------------------------------------------------------------ due-ness
 

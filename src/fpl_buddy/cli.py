@@ -401,6 +401,9 @@ def harvest(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Discover and list candidate URLs without fetching or storing."
     ),
+    notify: bool = typer.Option(
+        False, "--notify", help="Also send the summary to NOTIFY_CHANNEL, as the daily job does."
+    ),
     verbose: bool = False,
 ) -> None:
     """Collect new articles from the configured sources into the knowledge store."""
@@ -443,6 +446,14 @@ def harvest(
     console.print(f"Stored in {knowledge_dir(settings)}")
     for failure in report.failures[:10]:
         console.print(f"  [yellow]{failure}[/yellow]")
+
+    if notify:
+        # Opt-in rather than automatic: running this by hand is usually
+        # debugging, and a message per attempt would train you to ignore them.
+        from .notify import build_notifier, safe_notify_harvest
+
+        safe_notify_harvest(build_notifier(settings), report, settings)
+        console.print(f"[dim]Summary sent to {settings.notify_channel}.[/dim]")
 
 
 @app.command()
