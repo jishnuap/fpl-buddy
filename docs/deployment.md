@@ -124,7 +124,7 @@ The lifetimes are what matter operationally:
 
 | Token | Lives | Consequence |
 |---|---|---|
-| `access_token` | **8 hours** | Shorter than one gameweek cycle (propose T-36h → commit T-45m), so it is *always* refreshed at least once per cycle. |
+| `access_token` | **8 hours** | Shorter than the gap between gameweeks, so it is *always* refreshed at least once per cycle. |
 | `refresh_token` | **~180 days** | You re-paste roughly twice a season, not twice a week. |
 
 Refresh happens automatically before any request that needs it. Two things follow

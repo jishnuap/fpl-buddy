@@ -44,7 +44,14 @@ class Settings(BaseSettings):
 
     # -------------------------------------------------------------- behaviour
     propose_hours_before_deadline: float = Field(
-        default=36.0, description="When to generate the proposal."
+        default=1.0,
+        gt=0,
+        description=(
+            "When to generate the proposal. Kept short on purpose: press "
+            "conferences and late injury news land in the final hours, and a "
+            "proposal written a day and a half out is guessing at team news that "
+            "has not been spoken yet."
+        ),
     )
     commit_minutes_before_deadline: float = Field(
         default=45.0, description="Auto-execute an untouched proposal this long before the deadline."

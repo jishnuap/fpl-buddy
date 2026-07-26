@@ -62,7 +62,7 @@ The tick interval is the resolution of the whole schedule. At `*/10`:
 
 | | Configured | Actually fires |
 |---|---|---|
-| Propose | T-36h | between T-36h and T-35h50m |
+| Propose | T-1h | between T-1h and T-50m |
 | Commit | T-45m | between T-45m and T-35m |
 
 `COMMIT_MINUTES_BEFORE_DEADLINE=45` leaves plenty of room for that. Do not shrink

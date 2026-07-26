@@ -28,7 +28,7 @@ def test_blank_int_falls_back_to_the_default():
 
 
 def test_blank_float_falls_back_to_the_default():
-    assert build(propose_hours_before_deadline="").propose_hours_before_deadline == 36.0
+    assert build(propose_hours_before_deadline="").propose_hours_before_deadline == 1.0
 
 
 def test_blank_bool_falls_back_to_the_safe_default():

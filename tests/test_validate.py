@@ -383,14 +383,31 @@ def test_vice_outside_the_squad_is_fatal(context, settings):
     assert "captain_not_in_squad" in fatal_codes(issues)
 
 
-def test_flagged_captain_warns_without_blocking(context, settings):
-    """An injured captain is a judgement call, not an illegal move."""
-    proposal = make_proposal(
+def flagged_captain_proposal():
+    return make_proposal(
         captaincy=make_proposal().captaincy.model_copy(update={"captain_id": DEF_INJURED})
     )
-    issues = validate(proposal, context, settings)
+
+
+def test_flagged_captain_warns_without_blocking(context, settings):
+    """An injured captain is a judgement call, not an illegal move.
+
+    While proposing, a human is about to see this and can decide the doubt is
+    worth it -- so it must not be thrown away for them.
+    """
+    issues = validate(flagged_captain_proposal(), context, settings)
     assert "captain_flagged" in codes(issues)
     assert fatal_codes(issues) == set()
+
+
+def test_flagged_captain_is_fatal_at_submission(context, settings):
+    """Nobody is watching at the deadline, and the armband is doubled points.
+
+    Auto-submitting an injured captain unattended is the worst of the options
+    available here; blocking and saying so is the honest one.
+    """
+    issues = validate(flagged_captain_proposal(), context, settings, for_execution=True)
+    assert "captain_flagged" in fatal_codes(issues)
 
 
 # ----------------------------------------------------------- transfer targets

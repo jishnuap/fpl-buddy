@@ -22,6 +22,7 @@ from .config import Settings
 from .data.context import DecisionContext, build_context
 from .decisions.executor import ExecutionBlocked, execute
 from .decisions.schema import Proposal, ProposalStatus
+from .decisions.staleness import material_changes, rethink_instruction
 from .decisions.store import ProposalStore, build_store
 from .decisions.validate import validate
 from .fpl.client import FPLClient
@@ -59,15 +60,21 @@ class Orchestrator:
         self._model = model
 
     # ------------------------------------------------------------------ propose
-    def propose(self, *, context: DecisionContext | None = None) -> Proposal:
+    def propose(
+        self,
+        *,
+        context: DecisionContext | None = None,
+        extra_instruction: str = "",
+    ) -> Proposal:
         """Build the brief, run the agent, validate, store, notify."""
         context = context or build_context(self.settings, self.client)
         pending_notes = self.notes.pending()
+        instructions = [t for t in (_notes_instruction(pending_notes), extra_instruction) if t]
         agent_proposal, transcript = run_agent(
             context,
             self.client,
             self.settings,
-            extra_instruction=_notes_instruction(pending_notes),
+            extra_instruction="\n\n".join(instructions),
             model=self._model,
         )
 
@@ -186,8 +193,22 @@ class Orchestrator:
         proposal = self.store.latest(gameweek=context.gameweek.id)
 
         if proposal is None:
-            logger.warning("Commit job ran with no proposal for GW%s.", context.gameweek.id)
-            return None
+            # The propose window is short and a cron tick can be missed. Rather
+            # than skip the gameweek entirely, make the proposal now: late and
+            # unreviewed beats nothing at all, and the data is fresher anyway.
+            if not self.settings.auto_commit_enabled:
+                logger.warning(
+                    "Commit job ran with no proposal for GW%s, and auto-commit is off.",
+                    context.gameweek.id,
+                )
+                return None
+            logger.warning(
+                "No proposal exists for GW%s at commit time; producing one now.",
+                context.gameweek.id,
+            )
+            proposal = self.propose(context=context)
+            return self._execute(proposal, ProposalStatus.AUTO_EXECUTED, context=context)
+
         if proposal.is_terminal:
             logger.info(
                 "Nothing to commit: %s is %s.", proposal.id, proposal.status.value
@@ -195,6 +216,11 @@ class Orchestrator:
             return None
 
         if proposal.status == ProposalStatus.APPROVED:
+            # Deliberately not re-decided. You looked at this plan and said yes;
+            # quietly replacing it with a different one would make your approval
+            # meaningless. If the team news has since broken it, the guardrails
+            # block execution and tell you -- which is the honest outcome for a
+            # decision a human actually made.
             return self._execute(proposal, ProposalStatus.EXECUTED, context=context)
 
         if proposal.status in (ProposalStatus.PENDING, ProposalStatus.AMENDED):
@@ -206,6 +232,21 @@ class Orchestrator:
                 )
                 safe_notify(self.notifier, proposal, self.settings)
                 return proposal
+
+            reasons = material_changes(proposal.agent, context)
+            if reasons:
+                # Nobody has looked at this one, so there is no human decision to
+                # override -- only a stale machine one.
+                logger.warning(
+                    "Team news moved since %s was written; re-deciding. %s",
+                    proposal.id,
+                    " ".join(reasons),
+                )
+                proposal = self.propose(
+                    context=context, extra_instruction=rethink_instruction(reasons)
+                )
+                return self._execute(proposal, ProposalStatus.AUTO_EXECUTED, context=context)
+
             logger.info("Nobody touched %s; auto-committing.", proposal.id)
             return self._execute(proposal, ProposalStatus.AUTO_EXECUTED, context=context)
 

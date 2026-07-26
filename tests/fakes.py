@@ -72,6 +72,19 @@ CAPTAIN_NOT_OWNED_PROPOSAL: dict = {
 }
 
 
+# A second armband, for tests that need the re-run to reach a *different*
+# answer than the one the team news just invalidated.
+OTHER_CAPTAIN_PROPOSAL: dict = {
+    **ROLLING_PROPOSAL,
+    "captaincy": {
+        **ROLLING_PROPOSAL["captaincy"],
+        "captain_id": FWD_LIV,
+        "captain_name": "Okonkwo",
+    },
+    "summary": "Armband moves off the injured player.",
+}
+
+
 # Also seen live: two swaps that are each affordable alone, but not together.
 OVER_BUDGET_PROPOSAL: dict = {
     **ROLLING_PROPOSAL,
