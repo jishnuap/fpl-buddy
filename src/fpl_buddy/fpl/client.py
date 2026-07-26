@@ -161,7 +161,7 @@ class FPLClient:
         """``bootstrap-static``: players, teams, gameweeks. Cached per client."""
         if self._bootstrap is not None and not refresh:
             return self._bootstrap
-        data = self._get_json(f"{self.settings.fpl_api_base}/bootstrap-static/")
+        data = self._get_json(f"{self.settings.fpl_api_base}/bootstrap-static/", authorised=True)
         self._bootstrap = parse_bootstrap(data)
         return self._bootstrap
 
