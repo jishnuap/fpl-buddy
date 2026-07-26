@@ -172,8 +172,31 @@ def test_captain_candidates_flag_the_unavailable_and_the_benched(context):
 
 def test_render_tells_the_agent_the_leaderboards_are_not_its_squad(context):
     brief = context.render()
-    assert "Legal captain / vice options" in brief
+    assert "Captain / vice options from YOUR CURRENT squad" in brief
     assert "NOT yours" in brief
+
+
+def test_the_leaderboards_in_the_brief_are_tagged_with_ownership(context, solio):
+    """The tags are useless if the brief renders the boards without the squad."""
+    context.solio = solio
+    brief = context.render()
+
+    owned_row = next(
+        line for line in brief.splitlines() if f"id={FWD_CAPTAIN} " in line and "sel " in line
+    )
+    assert "[OWNED]" in owned_row
+    assert "[not owned]" in brief
+
+
+def test_the_candidate_list_admits_it_goes_stale_once_transfers_are_made(context):
+    """It is computed pre-transfer, so it lists sellable players and omits buys.
+
+    Presenting it as definitive is a claim the agent can catch out, and an agent
+    that catches the brief lying starts ignoring it.
+    """
+    brief = context.render()
+    assert "stop being eligible" in brief
+    assert "becomes eligible" in brief
 
 
 # ------------------------------------------------------------- free transfers

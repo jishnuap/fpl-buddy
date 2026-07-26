@@ -8,6 +8,8 @@ one player doesn't exist at all.
 
 from __future__ import annotations
 
+import re
+
 from fpl_buddy.data.solio import (
     LEADERBOARD_KEYS,
     SolioSnapshot,
@@ -71,6 +73,45 @@ def test_render_is_prompt_sized_text():
     assert "Solio Analytics snapshot" in text
     assert "## topProjected" in text
     assert text.count("\n") < 200
+
+
+# ------------------------------------------------------------------ ownership
+#
+# These boards rank the whole league. An agent captained the top row of one of
+# them, which was not a player it owned, and the proposal died on validation.
+# Every row now says which it is.
+
+
+def player_rows(text: str) -> list[str]:
+    """Just the ranked player lines -- not the legend, which mentions the markers."""
+    return [line for line in text.splitlines() if re.match(r"\s+\d+\. ", line)]
+
+
+def test_every_row_says_whether_the_player_is_owned(bootstrap):
+    snap, _ = join_to_elements(snapshot(), bootstrap)
+    rows = player_rows(snap.render(limit=5, owned={FWD_CAPTAIN}))
+
+    assert rows
+    assert all("[OWNED]" in line or "[not owned]" in line for line in rows)
+    assert any(f"id={FWD_CAPTAIN} | [OWNED]" in line for line in rows)
+
+
+def test_rendering_without_a_squad_marks_everything_unowned():
+    rows = player_rows(snapshot().render(limit=3))
+    assert rows
+    assert all("[not owned]" in line for line in rows)
+
+
+def test_ownership_percentage_is_not_called_own():
+    """"own 74%" next to an element id reads as "you own him". It is not that."""
+    rows = player_rows(snapshot().render(limit=3))
+    assert any("sel " in line for line in rows)
+    assert not any("own " in line.replace("[not owned]", "") for line in rows)
+
+
+def test_the_legend_says_the_boards_are_league_wide():
+    text = snapshot().render(limit=1)
+    assert "LEAGUE-WIDE" in text
 
 
 # ---------------------------------------------------------------------- join

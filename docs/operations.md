@@ -149,6 +149,7 @@ are ignored. A message with no reaction from the bot was never captured.
 | `AUTO_COMMIT_ENABLED=false` | Untouched proposals expire instead of submitting. |
 | `EXECUTE_ON_APPROVAL=false` | Approval records intent; the commit job submits later against fresher data. |
 | `MIN_CAPTAIN_CONFIDENCE=0.5` | Blocks execution when the agent isn't confident. |
+| `AGENT_REPAIR_ATTEMPTS=2` | Retries a proposal that fails validation, quoting the errors back. Costs one model call each. `0` disables. |
 | Rotate `APPROVAL_SECRET` | Every outstanding approval link dies immediately. |
 
 ## What the agent can and cannot do

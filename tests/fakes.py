@@ -14,7 +14,15 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
-from .conftest import FREE_MID_NEW, FWD_CAPTAIN, MID_LIV, MID_VICE, NEXT_GAMEWEEK
+from .conftest import (
+    FREE_FWD_EXPENSIVE,
+    FREE_MID_NEW,
+    FWD_CAPTAIN,
+    FWD_LIV,
+    MID_LIV,
+    MID_VICE,
+    NEXT_GAMEWEEK,
+)
 
 ROLLING_PROPOSAL: dict = {
     "gameweek": NEXT_GAMEWEEK,
@@ -48,6 +56,35 @@ ONE_TRANSFER_PROPOSAL: dict = {
         }
     ],
     "summary": "One transfer: Hollis out, Abbott in.",
+}
+
+
+# The failure seen in production: the armband goes to the top row of a
+# league-wide projection board, which is not a player the squad contains.
+CAPTAIN_NOT_OWNED_PROPOSAL: dict = {
+    **ROLLING_PROPOSAL,
+    "captaincy": {
+        **ROLLING_PROPOSAL["captaincy"],
+        "captain_id": FREE_MID_NEW,
+        "captain_name": "Abbott",
+    },
+    "summary": "Captains a player from the league-wide leaderboard.",
+}
+
+
+# Also seen live: two swaps that are each affordable alone, but not together.
+OVER_BUDGET_PROPOSAL: dict = {
+    **ROLLING_PROPOSAL,
+    "transfers": [
+        {
+            "element_out": FWD_LIV,
+            "element_in": FREE_FWD_EXPENSIVE,
+            "player_out_name": "Okonkwo",
+            "player_in_name": "Too dear",
+            "reason": "Ignores the price tag.",
+        }
+    ],
+    "summary": "Buys a player the bank cannot cover.",
 }
 
 
@@ -85,9 +122,33 @@ class FakeStructuredModel(BaseChatModel):
                     message=AIMessage(
                         content="",
                         tool_calls=[
-                            {"name": schema_tool, "args": self.payload, "id": "call_1"}
+                            {"name": schema_tool, "args": self._payload(), "id": "call_1"}
                         ],
                     )
                 )
             ]
         )
+
+    def _payload(self) -> dict:
+        return self.payload
+
+
+class FakeChangingModel(FakeStructuredModel):
+    """Answers differently each agent run, so a repair loop can be observed.
+
+    ``payloads`` is consumed one entry per ``run_agent`` attempt; the last entry
+    repeats once exhausted. A single-payload fake can only ever show that the
+    loop terminates, not that a correction is picked up.
+    """
+
+    payloads: list[dict] = []
+    attempt: int = 0
+
+    def _payload(self) -> dict:
+        return self.payloads[min(self.attempt - 1, len(self.payloads) - 1)]
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
+        # No counter to keep in sync: the repair loop appends one human turn per
+        # retry, so the number of human messages *is* the attempt number.
+        self.attempt = sum(1 for m in messages if getattr(m, "type", "") == "human")
+        return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)

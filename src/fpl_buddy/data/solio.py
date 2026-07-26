@@ -86,7 +86,7 @@ class SolioPlayer(BaseModel):
     # Filled in by the joiner below.
     element_id: int | None = None
 
-    def summary(self) -> str:
+    def summary(self, *, owned: bool = False) -> str:
         fixtures = ", ".join(o.describe() for o in self.opponents) or "?"
         bits = [f"{self.name} ({self.team}, {self.position})"]
         if self.price is not None:
@@ -96,10 +96,17 @@ class SolioPlayer(BaseModel):
         if self.captain_proj_points is not None:
             bits.append(f"capt {self.captain_proj_points:.2f}")
         if self.ownership is not None:
-            bits.append(f"own {self.ownership:.0f}%")
+            # Deliberately not "own": this is the share of *all* FPL managers who
+            # have the player, and an agent reading "own 74%" next to an element
+            # id has already been observed to conclude it owns him.
+            bits.append(f"sel {self.ownership:.0f}%")
         bits.append(f"vs {fixtures}")
         if self.element_id:
             bits.append(f"id={self.element_id}")
+        # The single most load-bearing token on the line. These boards are
+        # league-wide, so without a per-row marker the only way to tell an owned
+        # player from an unowned one is to cross-reference the squad table by eye.
+        bits.append("[OWNED]" if owned else "[not owned]")
         return " | ".join(bits)
 
 
@@ -124,17 +131,35 @@ class SolioSnapshot(BaseModel):
                     return row
         return None
 
-    def render(self, keys: tuple[str, ...] = LEADERBOARD_KEYS, limit: int = 12) -> str:
-        """Compact text form for stuffing into an LLM prompt."""
+    def render(
+        self,
+        keys: tuple[str, ...] = LEADERBOARD_KEYS,
+        limit: int = 12,
+        *,
+        owned: set[int] | None = None,
+    ) -> str:
+        """Compact text form for stuffing into an LLM prompt.
+
+        ``owned`` is the caller's current squad. Passing it tags every row, which
+        matters because these boards rank the whole league: an untagged row that
+        carries an ``id=`` looks exactly like a row from the squad table.
+        """
+        owned = owned or set()
         out: list[str] = [
             f"Solio Analytics snapshot -- GW{self.gameweek}, generated {self.generated_at}",
+            "LEAGUE-WIDE rankings, not your squad. [OWNED]/[not owned] says which is which, "
+            "and `sel %` is the share of all FPL managers who picked the player -- it has "
+            "nothing to do with whether you own him.",
         ]
         for key in keys:
             rows = self.board(key, limit)
             if not rows:
                 continue
             out.append(f"\n## {key}")
-            out.extend(f"  {i + 1}. {r.summary()}" for i, r in enumerate(rows))
+            out.extend(
+                f"  {i + 1}. {r.summary(owned=r.element_id in owned)}"
+                for i, r in enumerate(rows)
+            )
         return "\n".join(out)
 
 
