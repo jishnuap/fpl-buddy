@@ -94,6 +94,10 @@ def create_app(
             "dry_run": conf.dry_run,
             "auto_commit": conf.auto_commit_enabled,
             "entry_id": conf.fpl_entry_id,
+            # Worth surfacing: a deployment that scaled to zero with the
+            # scheduler still switched on looks healthy and quietly never
+            # commits. This is how you tell the two apart from outside.
+            "scheduler": "in-process" if conf.scheduler_enabled else "external",
         }
 
     # ------------------------------------------------------------------- reads

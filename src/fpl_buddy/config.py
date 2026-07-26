@@ -72,6 +72,24 @@ class Settings(BaseSettings):
         default=0.0,
         description="Skip auto-commit if the agent's confidence is below this (0-1).",
     )
+    # ------------------------------------------------------------- scheduling
+    # False turns this process into a plain web server: no APScheduler, and no
+    # Discord gateway connection either, since both are things that keep a
+    # container alive. Set it on the deployment where `fpl-buddy tick` drives
+    # the schedule from a platform cron instead. See docs/serverless.md.
+    scheduler_enabled: bool = Field(
+        default=True,
+        description="Run the in-process scheduler. False = the web service scales to zero.",
+    )
+    tick_anchor_interval_hours: float = Field(
+        default=6.0,
+        gt=0,
+        description=(
+            "How often `tick` re-reads the live deadline while it is far away. "
+            "Inside the propose window it re-reads every tick regardless."
+        ),
+    )
+
     fixture_horizon_gameweeks: int = Field(
         default=5,
         ge=1,

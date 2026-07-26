@@ -9,6 +9,7 @@ matches what the settings will actually do.
 from __future__ import annotations
 
 import pytest
+from pydantic import SecretStr
 
 from fpl_buddy.approval import make_token, read_token
 from fpl_buddy.decisions.schema import ProposalStatus
@@ -196,11 +197,28 @@ def test_webhook_posts_the_subject_text_and_proposal_id(settings, context):
     assert "/a/" in payload["text"]
 
 
-def test_discord_without_a_bot_is_an_explicit_error(settings):
-    """``notify_channel=discord`` needs a live bot instance passed in explicitly --
-    it can't be conjured from settings alone the way the other channels are."""
+def test_discord_without_a_bot_falls_back_to_posting_over_https(settings):
+    """A cron job cannot hold a gateway connection, but it can still POST.
+
+    Refusing to build a notifier here would mean the tick driver silently makes
+    proposals nobody is told about.
+    """
+    from fpl_buddy.discord_bot.rest import DiscordRestNotifier
+
     settings.notify_channel = "discord"
-    with pytest.raises(RuntimeError, match="no bot was passed"):
+    settings.discord_bot_token = SecretStr("token")
+    settings.discord_channel_id = 42
+
+    assert isinstance(build_notifier(settings), DiscordRestNotifier)
+
+
+def test_discord_without_credentials_is_still_an_error(settings):
+    """Falling back to HTTPS is not the same as inventing a channel to post to."""
+    settings.notify_channel = "discord"
+    settings.discord_bot_token = SecretStr("")
+    settings.discord_channel_id = 0
+
+    with pytest.raises(RuntimeError, match="DISCORD_BOT_TOKEN"):
         build_notifier(settings)
 
 

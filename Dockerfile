@@ -37,8 +37,14 @@ WORKDIR /home/app
 VOLUME ["/data"]
 EXPOSE 8080
 
-# The scheduler lives in this process, so the container must stay up between
-# gameweeks -- do not run it as a job.
+# By default the scheduler lives in this process, so the container must stay up
+# between gameweeks. The other way to run the same image is as a cron job --
+# `fpl-buddy tick`, alongside a web replica with SCHEDULER_ENABLED=false, which
+# then scales to zero. See docs/serverless.md.
+#
+# The healthcheck only applies to the long-running form; a job overrides the
+# entrypoint and exits, and Docker does not health-check a container that has
+# already finished.
 HEALTHCHECK --interval=60s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import os,urllib.request;\
 urllib.request.urlopen(f\"http://127.0.0.1:{os.environ.get('PORT','8080')}/healthz\").read()"

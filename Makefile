@@ -3,7 +3,7 @@ PY := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 
 .DEFAULT_GOAL := help
-.PHONY: help setup test lint fmt typecheck check context propose show commit serve docker publish clean
+.PHONY: help setup test lint fmt typecheck check context propose show commit serve tick docker publish clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | \
@@ -44,6 +44,9 @@ commit: ## Run the deadline job now (respects DRY_RUN)
 
 serve: ## Run the API and scheduler locally
 	$(VENV)/bin/fpl-buddy serve
+
+tick: ## Run whatever the schedule says is due right now, then exit
+	$(VENV)/bin/fpl-buddy tick
 
 docker: ## Build the container image locally
 	docker build -t fpl-buddy:local .

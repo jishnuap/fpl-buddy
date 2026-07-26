@@ -1,12 +1,20 @@
-"""Container entrypoint: the API and the scheduler in one process.
+"""Container entrypoint: the API and, by default, the scheduler in one process.
 
-One process is the right shape here. The work is a couple of HTTP calls and one
-LLM run per gameweek, and keeping the scheduler beside the API means the approval
-link and the deadline job read the same store with no coordination.
+One process is the right shape when you have somewhere to run it. The work is a
+couple of HTTP calls and one LLM run per gameweek, and keeping the scheduler
+beside the API means the approval link and the deadline job read the same store
+with no coordination.
 
-Scale this to more than one replica and both replicas would propose and commit.
-Run exactly one instance, and don't let it scale to zero -- a stopped container
-has no scheduler, so nothing commits at the deadline. See ``docs/deployment.md``.
+Two things in here keep a container alive: the in-process scheduler, and the
+Discord gateway's WebSocket. ``SCHEDULER_ENABLED=false`` turns off both, leaving
+a stateless web server that can scale to zero -- for the deployment where
+``fpl-buddy tick`` drives the schedule from a platform cron instead. That switch
+governs both because they share one reason for existing, and turning off only
+half of it would produce a service that still could not idle.
+
+With the scheduler on: run exactly one instance, and don't let it scale to zero
+-- a stopped container has no scheduler, so nothing commits at the deadline.
+See ``docs/deployment.md`` and ``docs/serverless.md``.
 """
 
 from __future__ import annotations
@@ -66,18 +74,21 @@ def build_app():
             raise RuntimeError(
                 "NOTIFY_CHANNEL=discord needs both DISCORD_BOT_TOKEN and DISCORD_CHANNEL_ID."
             )
-        from .discord_bot.bot import build_bot as _make_bot
+        if settings.scheduler_enabled:
+            from .discord_bot.bot import build_bot as _make_bot
 
-        # The bot's button callbacks need the orchestrator, and the
-        # orchestrator's notifier needs the bot to post through -- so the bot
-        # is built first without one, and given it once it exists.
-        bot = _make_bot(settings, orchestrator=None)
-        orchestrator = Orchestrator(settings, notifier=build_notifier(settings, discord_bot=bot))
+            # The bot's button callbacks need the orchestrator, and the
+            # orchestrator's notifier needs the bot to post through -- so the
+            # bot is built first without one, and given it once it exists.
+            bot = _make_bot(settings, orchestrator=None)
+
+    # No bot means build_notifier falls back to posting over HTTPS, which is
+    # what a scale-to-zero web service needs.
+    orchestrator = Orchestrator(settings, notifier=build_notifier(settings, discord_bot=bot))
+    if bot is not None:
         bot.orchestrator = orchestrator
-    else:
-        orchestrator = Orchestrator(settings)
 
-    scheduler = FplScheduler(settings, orchestrator=orchestrator)
+    scheduler = FplScheduler(settings, orchestrator=orchestrator) if settings.scheduler_enabled else None
 
     @asynccontextmanager
     async def lifespan(app):
@@ -85,11 +96,18 @@ def build_app():
             await _connect_discord_bot(bot, settings.discord_bot_token.get_secret_value())
             logger.info("Discord bot connected; notifications will post to channel %s.",
                         settings.discord_channel_id)
-        scheduler.start()
+        if scheduler is not None:
+            scheduler.start()
+        else:
+            logger.info(
+                "SCHEDULER_ENABLED=false: serving the API only. Something external "
+                "must run `fpl-buddy tick`, or no proposal is ever made or committed."
+            )
         try:
             yield
         finally:
-            scheduler.shutdown()
+            if scheduler is not None:
+                scheduler.shutdown()
             if bot is not None:
                 await bot.close()
 
@@ -104,8 +122,9 @@ def run() -> None:
     settings = get_settings()
     configure_logging(settings.log_level)
     logging.getLogger(__name__).info(
-        "Starting fpl-buddy on port %s (dry_run=%s, auto_commit=%s, entry=%s).",
+        "Starting fpl-buddy on port %s (dry_run=%s, auto_commit=%s, entry=%s, scheduler=%s).",
         settings.port, settings.dry_run, settings.auto_commit_enabled, settings.fpl_entry_id,
+        "in-process" if settings.scheduler_enabled else "external (fpl-buddy tick)",
     )
     uvicorn.run(build_app(), host="0.0.0.0", port=settings.port, log_level="warning")
 
