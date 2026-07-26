@@ -490,3 +490,27 @@ there is nothing listening for the interaction, and a button that silently fails
 when tapped is worse than a link that works. Getting them back means an
 interactions endpoint URL and Ed25519 signature verification, which is a
 feature, not a config change.
+
+**Reads fall back to Firecrawl on a 403, writes never do.** Confirmed live
+against the deployed Cloud Run job: `bootstrap-static` returns `403` on every
+attempt, authorised or not, headers spoofed or not. This is not the login bot
+protection above -- it is FPL's edge (Datadome, in front of Varnish) blocking
+the *IP itself*, cloud-provider ranges specifically, before the request reaches
+anything cookies or user-agents affect. No amount of header tuning fixes an
+IP-level block; only answering from a different network does. Options
+considered: a residential proxy API (ScraperAPI/Bright Data-class services,
+purpose-built for exactly this, but a new vendor and a new cost line), a
+self-hosted relay on a non-cloud box (free but new infra to keep alive), and the
+`vaastav/Fantasy-Premier-League` community GitHub mirror (free, but updated at
+most a couple of times a day -- too stale for a read taken an hour before a
+deadline). Firecrawl won because it was already paid for and already wired in
+for the knowledge harvester: verified with a live call against the exact blocked
+URL before writing any client code, and it came back `200` with the full,
+current payload. So `FPLClient._get_json` tries the fallback only on a `403`,
+never on a `401` (that is an expired session, which retrying with fresh headers
+already fixes), and never for writes (`_post_json` is untouched -- a page
+renderer standing in for a transactional POST is not a trade worth making). Any
+failure in the fallback itself -- no key, package not installed, the call
+erroring, the response not being JSON -- returns `None` rather than raising, so
+it degrades to exactly the original `403` rather than risking a worse, harder to
+diagnose error in its place.

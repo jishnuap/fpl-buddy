@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -225,6 +226,95 @@ def test_an_explicit_event_wins_over_future(authed_settings):
     params = route.calls[0].request.url.params
     assert params["event"] == "4"
     assert "future" not in params
+
+
+def _stub_firecrawl(*, raw_html: str | None = None, error: Exception | None = None):
+    """A stand-in for ``firecrawl.Firecrawl``, monkeypatched in place of the class.
+
+    Returned as a class (not an instance), because production code calls
+    ``Firecrawl(api_key=key)`` -- constructing it is part of what's under test.
+    """
+    calls: list[dict] = []
+
+    class _Stub:
+        def __init__(self, api_key: str) -> None:
+            self.api_key = api_key
+
+        def scrape(self, url: str, **kwargs):
+            calls.append({"url": url, **kwargs})
+            if error is not None:
+                raise error
+            return SimpleNamespace(raw_html=raw_html)
+
+    _Stub.calls = calls  # type: ignore[attr-defined]
+    return _Stub
+
+
+@respx.mock
+def test_a_403_read_falls_back_to_firecrawl(authed_settings, monkeypatch):
+    """FPL's edge blocks the IP outright; Firecrawl fetches from its own IP pool."""
+    authed_settings.firecrawl_api_key = _secret("fc-key")
+    stub = _stub_firecrawl(raw_html=json.dumps(load_json("bootstrap-static.json")))
+    monkeypatch.setattr("fpl_buddy.fpl.client.Firecrawl", stub)
+    respx.get(f"{API}/bootstrap-static/").mock(return_value=httpx.Response(403, text=""))
+
+    boot = FPLClient(authed_settings).bootstrap()
+
+    assert boot.next_gameweek.id == 4
+    assert stub.calls[0]["url"] == f"{API}/bootstrap-static/"
+    assert "sessionid=abc123" in stub.calls[0]["headers"]["Cookie"], (
+        "bootstrap() reads authorised -- the fallback should carry the same "
+        "session headers the direct request did"
+    )
+
+
+@respx.mock
+def test_a_403_without_a_firecrawl_key_still_raises(authed_settings):
+    """No FIRECRAWL_API_KEY configured: behaviour is exactly what it was before."""
+    respx.get(f"{API}/bootstrap-static/").mock(return_value=httpx.Response(403, text="blocked"))
+    with pytest.raises(FPLApiError) as excinfo:
+        FPLClient(authed_settings).bootstrap()
+    assert excinfo.value.status_code == 403
+
+
+@respx.mock
+def test_a_firecrawl_error_falls_through_to_the_original_403(authed_settings, monkeypatch):
+    authed_settings.firecrawl_api_key = _secret("fc-key")
+    stub = _stub_firecrawl(error=RuntimeError("firecrawl is down"))
+    monkeypatch.setattr("fpl_buddy.fpl.client.Firecrawl", stub)
+    respx.get(f"{API}/bootstrap-static/").mock(return_value=httpx.Response(403, text="blocked"))
+
+    with pytest.raises(FPLApiError) as excinfo:
+        FPLClient(authed_settings).bootstrap()
+    assert excinfo.value.status_code == 403, "a broken fallback must not hide the real error"
+
+
+@respx.mock
+def test_unparsable_firecrawl_content_falls_through(authed_settings, monkeypatch):
+    authed_settings.firecrawl_api_key = _secret("fc-key")
+    stub = _stub_firecrawl(raw_html="<html>not json</html>")
+    monkeypatch.setattr("fpl_buddy.fpl.client.Firecrawl", stub)
+    respx.get(f"{API}/bootstrap-static/").mock(return_value=httpx.Response(403, text="blocked"))
+
+    with pytest.raises(FPLApiError):
+        FPLClient(authed_settings).bootstrap()
+
+
+@respx.mock
+def test_a_401_does_not_try_the_firecrawl_fallback(authed_settings, monkeypatch):
+    """A 401 is an expired session, handled by the existing refresh-and-retry --
+
+    not FPL's edge blocking the IP, so it's not something a different network
+    would fix. Firecrawl must not be spent on it.
+    """
+    authed_settings.firecrawl_api_key = _secret("fc-key")
+    stub = _stub_firecrawl(raw_html="{}")
+    monkeypatch.setattr("fpl_buddy.fpl.client.Firecrawl", stub)
+    respx.get(f"{API}/my-team/999999/").mock(return_value=httpx.Response(401, text="nope"))
+
+    with pytest.raises(FPLApiError):
+        FPLClient(authed_settings).my_team()
+    assert stub.calls == []
 
 
 @respx.mock
