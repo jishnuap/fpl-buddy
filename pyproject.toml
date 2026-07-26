@@ -25,6 +25,7 @@ dependencies = [
     "jinja2>=3.1",
     "discord.py>=2.4",
     "trafilatura>=1.12",  # article extraction, feed and sitemap parsing
+    "lxml>=5.0",  # reading a page's own headline signals, where trafilatura guesses
     "pyyaml>=6.0",  # knowledge source config
 ]
 
@@ -78,7 +79,7 @@ warn_unused_ignores = true
 [[tool.mypy.overrides]]
 module = [
     "apscheduler.*", "azure.*", "deepagents.*", "itsdangerous.*",
-    "firecrawl.*", "scrapling.*", "trafilatura.*", "youtube_transcript_api.*",
+    "firecrawl.*", "lxml.*", "scrapling.*", "trafilatura.*", "youtube_transcript_api.*",
 ]
 ignore_missing_imports = true
 
