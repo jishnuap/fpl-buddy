@@ -28,8 +28,12 @@ COPY --from=build /build/dist/*.whl /tmp/dist/
 # Resolve the wheel filename first: `/tmp/dist/*.whl[azure]` looks like a glob
 # with a character class, so the shell matches nothing and pip gets the literal
 # pattern. Extras have to be appended to an already-expanded path.
+#
+# firecrawl here, not just for the knowledge harvester: FPLClient falls back to
+# it when FPL's edge 403s a cloud IP outright (see fpl/client.py), which is the
+# normal case for this image's deployment target, not an optional enhancement.
 RUN wheel="$(ls /tmp/dist/*.whl)" \
-    && pip install "${wheel}[azure]" \
+    && pip install "${wheel}[azure,firecrawl]" \
     && rm -rf /tmp/dist
 
 USER app
