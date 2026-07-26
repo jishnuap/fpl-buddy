@@ -22,6 +22,7 @@ from apscheduler.triggers.date import DateTrigger
 
 from .config import Settings
 from .orchestrator import Orchestrator
+from .schedule import plan_for
 
 logger = logging.getLogger(__name__)
 
@@ -85,28 +86,19 @@ class FplScheduler:
             logger.error("Could not refresh bootstrap-static to re-anchor: %s", exc)
             return
 
-        gameweek = bootstrap.next_gameweek
-        if gameweek is None:
+        plan = plan_for(bootstrap, self.settings)
+        if plan.season_over:
             logger.info("No upcoming gameweek; season is over. Clearing jobs.")
             self._remove(PROPOSE_JOB)
             self._remove(COMMIT_JOB)
             return
 
-        deadline = gameweek.deadline_time
+        assert plan.gameweek and plan.propose_at and plan.commit_at  # narrows for mypy
         now = datetime.now(UTC)
-        propose_at = deadline - timedelta(hours=self.settings.propose_hours_before_deadline)
-        commit_at = deadline - timedelta(minutes=self.settings.commit_minutes_before_deadline)
+        logger.info("%s.", plan.describe(self.timezone))
 
-        logger.info(
-            "GW%s deadline %s -- propose %s, commit %s.",
-            gameweek.id,
-            deadline.astimezone(self.timezone).isoformat(timespec="minutes"),
-            propose_at.astimezone(self.timezone).isoformat(timespec="minutes"),
-            commit_at.astimezone(self.timezone).isoformat(timespec="minutes"),
-        )
-
-        self._schedule_propose(gameweek.id, propose_at, commit_at, now)
-        self._schedule_commit(gameweek.id, commit_at, now)
+        self._schedule_propose(plan.gameweek, plan.propose_at, plan.commit_at, now)
+        self._schedule_commit(plan.gameweek, plan.commit_at, now)
 
     def run_propose(self) -> None:
         try:

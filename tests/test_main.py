@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from pydantic import SecretStr
 
 from fpl_buddy.main import _connect_discord_bot
 
@@ -53,3 +54,56 @@ async def test_a_bot_that_never_becomes_ready_times_out_with_an_actionable_messa
     bot = _FakeBot(ready_after_login=False)
     with pytest.raises(RuntimeError, match="DISCORD_BOT_TOKEN"):
         await _connect_discord_bot(bot, "test-token", timeout=0.05)
+
+
+# --------------------------------------------------------------- process shape
+
+
+def _built_with(settings, monkeypatch):
+    """build_app() against injected settings, with no network in the constructor."""
+    from fpl_buddy import main
+
+    monkeypatch.setattr(main, "get_settings", lambda: settings)
+    return main.build_app()
+
+
+def test_the_scheduler_runs_in_process_by_default(settings, monkeypatch):
+    app = _built_with(settings, monkeypatch)
+    assert app.state.scheduler is not None
+
+
+def test_disabling_the_scheduler_leaves_a_plain_web_server(settings, monkeypatch):
+    """The scale-to-zero deployment: `fpl-buddy tick` drives the schedule, and
+    nothing in this process is allowed to keep the container alive."""
+    settings.scheduler_enabled = False
+
+    app = _built_with(settings, monkeypatch)
+
+    assert app.state.scheduler is None
+    assert app.state.discord_bot is None
+
+
+def test_no_gateway_bot_when_the_scheduler_is_off(settings, monkeypatch):
+    """A gateway WebSocket pins a container up exactly like the scheduler does,
+    so one switch has to govern both -- otherwise the service still can't idle."""
+    from fpl_buddy.discord_bot.rest import DiscordRestNotifier
+
+    settings.notify_channel = "discord"
+    settings.discord_bot_token = SecretStr("token")
+    settings.discord_channel_id = 42
+    settings.scheduler_enabled = False
+
+    app = _built_with(settings, monkeypatch)
+
+    assert app.state.discord_bot is None
+    assert isinstance(app.state.orchestrator.notifier, DiscordRestNotifier)
+
+
+def test_healthz_says_which_scheduler_is_in_charge(settings, monkeypatch):
+    """A deployment that scaled to zero with the scheduler still on looks
+    healthy and quietly never commits. This is how you tell from outside."""
+    from fastapi.testclient import TestClient
+
+    settings.scheduler_enabled = False
+    with TestClient(_built_with(settings, monkeypatch)) as client:
+        assert client.get("/healthz").json()["scheduler"] == "external"

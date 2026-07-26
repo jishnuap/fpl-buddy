@@ -362,25 +362,38 @@ def commit(verbose: bool = False) -> None:
 @app.command()
 def schedule(verbose: bool = False) -> None:
     """Show when the propose and commit jobs would run for the next deadline."""
-    from datetime import timedelta
+    from .schedule import plan_for
 
     settings = _setup(verbose)
-    gameweek = FPLClient(settings).bootstrap().next_gameweek
-    if gameweek is None:
+    plan = plan_for(FPLClient(settings).bootstrap(), settings)
+    if plan.season_over:
         _die("No upcoming gameweek.")
 
-    deadline = gameweek.deadline_time.astimezone()
-    propose_at = deadline - timedelta(hours=settings.propose_hours_before_deadline)
-    commit_at = deadline - timedelta(minutes=settings.commit_minutes_before_deadline)
     fmt = "%a %d %b %H:%M %Z"
     console.print(
-        f"{gameweek.name}\n"
-        f"  propose   {propose_at.strftime(fmt)}\n"
-        f"  commit    {commit_at.strftime(fmt)}\n"
-        f"  deadline  {deadline.strftime(fmt)}\n"
+        f"Gameweek {plan.gameweek}\n"
+        f"  propose   {plan.propose_at.astimezone().strftime(fmt)}\n"  # type: ignore[union-attr]
+        f"  commit    {plan.commit_at.astimezone().strftime(fmt)}\n"  # type: ignore[union-attr]
+        f"  deadline  {plan.deadline.astimezone().strftime(fmt)}\n"  # type: ignore[union-attr]
         f"  auto-commit {'on' if settings.auto_commit_enabled else 'off'}, "
         f"dry_run {'on' if settings.dry_run else 'off'}"
     )
+
+
+@app.command()
+def tick(verbose: bool = False) -> None:
+    """Run whatever the schedule says is due right now, then exit.
+
+    This is what a platform cron runs every few minutes when the container is
+    not kept alive. Most invocations do nothing and cost one file read.
+    """
+    from .tick import run_tick
+
+    settings = _setup(verbose)
+    report = run_tick(settings)
+    console.print(report.summary())
+    if report.errors:
+        raise typer.Exit(code=1)
 
 
 @app.command()

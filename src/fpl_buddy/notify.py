@@ -100,13 +100,21 @@ def build_notifier(settings: Settings, *, discord_bot: Any = None) -> Notifier:
         case "webhook":
             return WebhookNotifier(settings)
         case "discord":
-            if discord_bot is None:
-                raise RuntimeError(
-                    "NOTIFY_CHANNEL=discord but no bot was passed to build_notifier()."
-                )
-            from .discord_bot.notifier import DiscordNotifier
+            # With a gateway bot: an embed plus working Approve/Amend/Reject
+            # buttons. Without one -- the tick job, or a web service running
+            # with SCHEDULER_ENABLED=false -- the same embed goes over plain
+            # HTTPS and the approval link carries the interaction instead.
+            # Nothing here should refuse to notify just because it has no
+            # WebSocket; the proposal exists either way and the human needs to
+            # hear about it.
+            if discord_bot is not None:
+                from .discord_bot.notifier import DiscordNotifier
 
-            return DiscordNotifier(discord_bot, settings)
+                return DiscordNotifier(discord_bot, settings)
+
+            from .discord_bot.rest import DiscordRestNotifier
+
+            return DiscordRestNotifier(settings)
         case _:
             return LogNotifier()
 
