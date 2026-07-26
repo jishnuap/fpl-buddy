@@ -32,9 +32,11 @@ class FakeClient:
 class RecordingNotifier:
     def __init__(self) -> None:
         self.sent: list[tuple[str, str]] = []
+        self.meta: list[dict | None] = []
 
     def send(self, subject, text, *, html=None, meta=None) -> None:
         self.sent.append((subject, text))
+        self.meta.append(meta)
 
 
 class FakeOrchestrator:
@@ -215,6 +217,68 @@ def test_a_failed_anchor_is_reported_and_does_not_raise(bootstrap, settings, led
 
     assert report.ran == []
     assert "FPL is down" in report.errors[0]
+
+
+def _broken(bootstrap, message: str):
+    class Broken(FakeOrchestrator):
+        def __init__(self):
+            super().__init__(bootstrap)
+
+            def boom(refresh=False):
+                raise RuntimeError(message)
+
+            self.client.bootstrap = boom  # type: ignore[method-assign]
+
+    return Broken()
+
+
+def test_a_failed_tick_notifies_discord(bootstrap, settings, ledger):
+    orchestrator = _broken(bootstrap, "FPL is down")
+    now = datetime.now(UTC)
+
+    run_tick(settings, now=now, ledger=ledger, orchestrator=orchestrator)
+
+    assert len(orchestrator.notifier.sent) == 1
+    subject, text = orchestrator.notifier.sent[0]
+    assert subject == "FPL tick failed"
+    assert "FPL is down" in text
+    assert orchestrator.notifier.meta == [{"kind": "error"}]
+
+
+def test_the_same_failure_is_not_repeated_within_the_cooldown(bootstrap, settings, ledger):
+    now = datetime.now(UTC)
+
+    run_tick(settings, now=now, ledger=ledger, orchestrator=_broken(bootstrap, "FPL is down"))
+    second = _broken(bootstrap, "FPL is down")
+    run_tick(settings, now=now + timedelta(minutes=5), ledger=ledger, orchestrator=second)
+
+    assert second.notifier.sent == []
+
+
+def test_a_different_failure_notifies_again_immediately(bootstrap, settings, ledger):
+    now = datetime.now(UTC)
+
+    run_tick(settings, now=now, ledger=ledger, orchestrator=_broken(bootstrap, "FPL is down"))
+    second = _broken(bootstrap, "a completely different problem")
+    run_tick(settings, now=now + timedelta(minutes=5), ledger=ledger, orchestrator=second)
+
+    assert len(second.notifier.sent) == 1
+    assert "a completely different problem" in second.notifier.sent[0][1]
+
+
+def test_the_same_failure_notifies_again_after_the_cooldown(bootstrap, settings, ledger):
+    now = datetime.now(UTC)
+
+    run_tick(settings, now=now, ledger=ledger, orchestrator=_broken(bootstrap, "FPL is down"))
+    second = _broken(bootstrap, "FPL is down")
+    run_tick(
+        settings,
+        now=now + timedelta(hours=1, seconds=1),
+        ledger=ledger,
+        orchestrator=second,
+    )
+
+    assert len(second.notifier.sent) == 1
 
 
 # --------------------------------------------------------------------- lease

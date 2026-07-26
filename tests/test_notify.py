@@ -23,9 +23,11 @@ from fpl_buddy.notify import (
     SmtpNotifier,
     WebhookNotifier,
     build_notifier,
+    render_errors,
     render_harvest,
     render_proposal,
     safe_notify,
+    safe_notify_errors,
     safe_notify_harvest,
 )
 
@@ -393,3 +395,49 @@ def test_the_summary_is_tagged_so_a_webhook_can_route_it(settings):
     safe_notify_harvest(notifier, HarvestReport(stored=1, notes=[note()]), settings)
 
     assert notifier.meta == [{"kind": "harvest"}]
+
+
+# --------------------------------------------------------------- tick failures
+
+
+def test_a_single_error_gets_a_singular_subject():
+    subject, text = render_errors(["propose: GET .../bootstrap-static/ failed with 403"])
+    assert subject == "FPL tick failed"
+    assert "propose: GET .../bootstrap-static/ failed with 403" in text
+
+
+def test_several_errors_are_all_listed_and_counted():
+    subject, text = render_errors(["propose: boom", "harvest: also boom"])
+    assert subject == "FPL tick failed (2 errors)"
+    assert "propose: boom" in text
+    assert "harvest: also boom" in text
+
+
+def test_the_error_notification_is_tagged_so_it_can_be_routed(settings):
+    notifier = RecordingNotifier()
+    safe_notify_errors(notifier, ["propose: boom"], settings)
+
+    assert notifier.meta == [{"kind": "error"}]
+
+
+def test_error_notifications_can_be_switched_off(settings):
+    settings.notify_errors = False
+    notifier = RecordingNotifier()
+
+    safe_notify_errors(notifier, ["propose: boom"], settings)
+
+    assert notifier.sent == []
+
+
+def test_no_errors_means_nothing_is_sent(settings):
+    notifier = RecordingNotifier()
+    safe_notify_errors(notifier, [], settings)
+    assert notifier.sent == []
+
+
+def test_a_dead_notifier_never_raises_out_of_the_error_notification(settings):
+    class Broken(Notifier):
+        def send(self, subject, text, *, html=None, meta=None):
+            raise RuntimeError("discord is on fire")
+
+    safe_notify_errors(Broken(), ["propose: boom"], settings)

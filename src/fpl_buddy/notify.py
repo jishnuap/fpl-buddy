@@ -130,6 +130,29 @@ def safe_notify(notifier: Notifier, proposal: Proposal, settings: Settings) -> N
         )
 
 
+def render_errors(errors: list[str]) -> tuple[str, str]:
+    """``(subject, text)`` for one or more failures from the same scheduled run."""
+    subject = "FPL tick failed" if len(errors) == 1 else f"FPL tick failed ({len(errors)} errors)"
+    text = "\n".join(f"- {e}" for e in errors)
+    return subject, text
+
+
+def safe_notify_errors(notifier: Notifier, errors: list[str], settings: Settings) -> None:
+    """Tell Discord a scheduled run failed. Best-effort, like every other notify here.
+
+    The caller (tick.py / scheduler.py) already decided this is worth saying --
+    a new failure, or a repeat outside the cooldown -- so this only has to
+    render and send without itself becoming another way for the run to fail.
+    """
+    if not settings.notify_errors or not errors:
+        return
+    try:
+        subject, text = render_errors(errors)
+        notifier.send(subject, text, meta={"kind": "error"})
+    except Exception as exc:  # noqa: BLE001 - deliberate: notification is best-effort
+        logger.error("Could not send the tick-failure notification (%s). Errors: %s", exc, errors)
+
+
 def safe_notify_harvest(notifier: Notifier, report, settings: Settings) -> None:
     """Send the harvest summary. Doubly best-effort.
 
