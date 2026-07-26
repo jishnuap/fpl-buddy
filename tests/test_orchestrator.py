@@ -20,7 +20,11 @@ from fpl_buddy.notify import Notifier
 from fpl_buddy.orchestrator import NotActionable, Orchestrator, ProposalNotFound
 
 from .conftest import FREE_MID_NEW, FWD_CAPTAIN, MID_LIV, NEXT_GAMEWEEK
-from .fakes import ONE_TRANSFER_PROPOSAL, FakeStructuredModel
+from .fakes import (
+    ONE_TRANSFER_PROPOSAL,
+    OTHER_CAPTAIN_PROPOSAL,
+    FakeStructuredModel,
+)
 
 
 class RecordingNotifier(Notifier):
@@ -319,7 +323,19 @@ def test_auto_commit_off_expires_instead_of_submitting(orch, fake_client):
     assert fake_client.picks_calls == [], "nothing may be submitted"
 
 
-def test_auto_commit_with_no_proposal_does_nothing(orch, fake_client):
+def test_auto_commit_with_no_proposal_makes_one(orch, fake_client):
+    """The propose window is ~15 minutes wide; missing it must not cost the week."""
+    committed = orch.auto_commit()
+
+    assert committed is not None
+    assert committed.status == ProposalStatus.AUTO_EXECUTED
+    assert len(fake_client.picks_calls) == 1
+
+
+def test_auto_commit_with_no_proposal_stays_put_when_auto_commit_is_off(orch, fake_client):
+    """Producing one here would be pointless: nothing is allowed to submit it."""
+    orch.settings.auto_commit_enabled = False
+
     assert orch.auto_commit() is None
     assert fake_client.picks_calls == []
 
@@ -331,6 +347,82 @@ def test_auto_commit_ignores_an_already_executed_proposal(orch, fake_client):
 
     assert orch.auto_commit() is None
     assert len(fake_client.picks_calls) == 1, "must not submit twice"
+
+
+def test_late_team_news_makes_auto_commit_re_decide(
+    settings, store, fake_client, notifier, mock_solio
+):
+    """Nobody looked at this plan, so there is no human call to override."""
+    orch = Orchestrator(
+        settings, store=store, client=fake_client, notifier=notifier,
+        model=FakeStructuredModel(payload=ONE_TRANSFER_PROPOSAL),
+    )
+    first = orch.propose()
+
+    # The captain limps out of Friday's press conference.
+    captain = fake_client._bootstrap.player(first.agent.captaincy.captain_id)
+    captain.status = "i"
+    captain.chance_of_playing_next_round = 25
+
+    # The re-run reaches a different answer, as a real one would once the brief
+    # shows the flag. FakeChangingModel advances within a single agent run, not
+    # across two, so the model is swapped rather than sequenced.
+    orch._model = FakeStructuredModel(payload=OTHER_CAPTAIN_PROPOSAL)
+
+    committed = orch.auto_commit()
+
+    assert committed is not None
+    assert committed.id != first.id, "a fresh proposal, not the stale one"
+    assert committed.status == ProposalStatus.AUTO_EXECUTED
+    assert committed.agent.captaincy.captain_id != first.agent.captaincy.captain_id
+    assert store.get(first.id).status == ProposalStatus.SUPERSEDED
+
+
+def test_a_rethink_that_picks_the_same_injured_captain_is_still_blocked(
+    settings, store, fake_client, notifier, mock_solio
+):
+    """Re-deciding is not a licence to submit. The guardrails still have the last word."""
+    orch = Orchestrator(
+        settings, store=store, client=fake_client, notifier=notifier,
+        model=FakeStructuredModel(payload=ONE_TRANSFER_PROPOSAL),
+    )
+    first = orch.propose()
+
+    captain = fake_client._bootstrap.player(first.agent.captaincy.captain_id)
+    captain.status = "i"
+    captain.chance_of_playing_next_round = 25
+
+    with pytest.raises(ExecutionBlocked):
+        orch.auto_commit()
+
+    assert fake_client.picks_calls == []
+
+
+def test_an_approved_plan_is_never_silently_re_decided(
+    settings, store, fake_client, notifier, mock_solio
+):
+    """You said yes to a specific plan. Swapping it out would make that meaningless.
+
+    The honest outcome is to stop and say so, which is what the guardrails now
+    do -- captain_flagged is fatal at execution.
+    """
+    settings.execute_on_approval = False
+    orch = Orchestrator(
+        settings, store=store, client=fake_client, notifier=notifier,
+        model=FakeStructuredModel(payload=ONE_TRANSFER_PROPOSAL),
+    )
+    proposal = orch.propose()
+    orch.approve(proposal.id)
+
+    captain = fake_client._bootstrap.player(proposal.agent.captaincy.captain_id)
+    captain.status = "i"
+    captain.chance_of_playing_next_round = 25
+
+    with pytest.raises(ExecutionBlocked):
+        orch.auto_commit()
+
+    assert store.get(proposal.id).status == ProposalStatus.FAILED
+    assert fake_client.picks_calls == []
 
 
 def test_auto_commit_revalidates_and_refuses_a_stale_plan(

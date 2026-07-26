@@ -151,7 +151,9 @@ def validate(
             )
 
     # ----------------------------------------------------------- captaincy
-    issues.extend(_validate_captaincy(proposal, context, resolved_squad))
+    issues.extend(
+        _validate_captaincy(proposal, context, resolved_squad, for_execution=for_execution)
+    )
 
     # ------------------------------------------------------- XI / bench
     issues.extend(_validate_lineup(proposal, context, resolved_squad))
@@ -345,7 +347,11 @@ def _validate_transfers(
 
 
 def _validate_captaincy(
-    proposal: AgentProposal, context: DecisionContext, squad: list[int]
+    proposal: AgentProposal,
+    context: DecisionContext,
+    squad: list[int],
+    *,
+    for_execution: bool = False,
 ) -> list[ValidationIssue]:
     issues: list[ValidationIssue] = []
     cap = proposal.captaincy
@@ -377,7 +383,12 @@ def _validate_captaincy(
                         f"Proposed {role} {player.web_name} is flagged "
                         f"({player.chance_of_playing_next_round}%): {player.news or 'no detail'}."
                     ),
-                    fatal=False,
+                    # A warning while proposing: captaining a 75% player can be a
+                    # considered call, and a human is about to see it. Fatal at
+                    # submission, where nobody is watching -- if the armband is on
+                    # an injured player at the deadline, silently going ahead is
+                    # the worst of the available options.
+                    fatal=for_execution,
                 )
             )
     return issues

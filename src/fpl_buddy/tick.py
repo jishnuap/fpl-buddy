@@ -169,15 +169,19 @@ def _act_on_plan(
         # Several ticks fall inside this window. auto_commit() is a no-op on a
         # resolved proposal, but it rebuilds the whole context before working
         # that out -- so check the cheap store read first and only pay for the
-        # rebuild when there is genuinely something to submit.
+        # rebuild when there is genuinely something to do.
         existing = orchestrator.latest(gameweek=plan.gameweek)
-        if existing is None:
-            logger.warning(
-                "Commit window is open for GW%s but no proposal was ever made.", plan.gameweek
-            )
-        elif existing.is_terminal:
+        if existing is not None and existing.is_terminal:
             logger.debug("GW%s is already %s.", plan.gameweek, existing.status.value)
         else:
+            # A missing proposal is no longer a dead end. The propose window is
+            # narrow enough that a couple of skipped ticks can miss it entirely,
+            # and auto_commit() will produce one rather than lose the gameweek.
+            if existing is None:
+                logger.warning(
+                    "Commit window is open for GW%s with no proposal; auto_commit will "
+                    "make one.", plan.gameweek,
+                )
             _commit(orchestrator, ledger, now, report)
 
 

@@ -62,6 +62,46 @@ happily return the same surname at the wrong club — precisely the failure that
 transfers in the wrong player. Unmatched rows are reported to the agent as
 unusable instead.
 
+**Propose an hour before the deadline, not a day and a half.** The original
+T-36h was chosen for review comfort, and it bought that comfort with the only
+thing that actually decides the gameweek: team news. Press conferences and late
+injury updates land in the final hours. For GW1 — deadline Friday 18:30 BST —
+T-36h fell on Thursday morning, before the pressers had even happened. The
+ceiling is worth stating too: confirmed XIs are published an hour *after* the
+deadline, so no setting reaches them.
+
+The cost is a ~15-minute review window and a propose window only one or two
+cron ticks wide. The second is the dangerous one, and it is why
+`auto_commit` will now produce a proposal when none exists rather than logging
+that the window was missed. Losing a gameweek to a skipped tick is a much worse
+outcome than an unreviewed proposal.
+
+**Re-validating at commit could only ever say no; now it can also re-decide.**
+Whenever you propose, the data can change afterwards, and the commit job's two
+available answers were both bad: `captain_flagged` was non-fatal, so an injured
+captain was submitted silently, while `target_unavailable` is fatal, so one
+unavailable target blocked the transfers, the armband and the lineup together
+and left the gameweek untouched.
+
+`decisions/staleness.py` adds the missing third option. On a material change —
+flagged captain or vice, transfer target doubtful or ruled out, starter ruled
+out — the plan is re-decided against fresh data instead of being submitted or
+vetoed. Two deliberate limits on that:
+
+- **An approved proposal is never re-decided.** You looked at a specific plan
+  and said yes; replacing it with a different one would make approval
+  meaningless. If the news has broken it, execution is blocked and you are told.
+- **`captain_flagged` is now fatal at execution only.** Captaining a 75% player
+  is a legitimate call to *make* while a human is looking at it, and not
+  something to do unattended at the deadline.
+
+It also does not diff against the stored snapshot. That snapshot is rendered
+text, and reconstructing structured state from it to compute a delta would be
+fragile for very little gain, so it asks the simpler question — is anything
+about this plan a problem *now* — against a fresh context. The price is one
+wasted re-run when the agent knowingly picked a flagged player and nothing has
+changed since. The gain is that it cannot miss a change it forgot to record.
+
 **A proposal that fails the guardrails is handed back, not just rejected.** The
 first live run of the season came back captaining Haaland — who wasn't in the
 squad — and starting a player it had transferred out in the same proposal. Both
@@ -125,10 +165,13 @@ and manual dispatch publish. An accidental merge cannot ship an image.
 auth as `pl_profile` + `sessionid` cookies. FPL now issues a PingOne
 `access_token` (8h) and `refresh_token` (~180 days) instead, and
 `/api/my-team/{entry}/` returns `403 "Authentication credentials were not
-provided."` unless the access token is sent as a bearer header. Since a gameweek
-cycle spans 36 hours and the access token lasts 8, the token held when a proposal
-is made is *always* dead by the time it would be submitted — so refresh is part
-of the core loop, not a nicety. The client asks the authenticator for credentials
+provided."` unless the access token is sent as a bearer header. Gameweeks are a
+week apart and the access token lasts 8 hours, so the token is dead long before
+the next cycle needs it — refresh is part of the core loop, not a nicety. (This
+was originally justified by the 36-hour propose-to-commit gap. That gap is now
+one hour, comfortably inside the token's life; the conclusion survives because
+the gap *between gameweeks* was always the binding constraint.) The client asks
+the authenticator for credentials
 on every request rather than caching them for the life of the process, for the
 same reason.
 

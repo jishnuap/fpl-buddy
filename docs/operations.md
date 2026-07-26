@@ -4,10 +4,40 @@
 
 | When | What happens |
 |---|---|
-| T-36h | Propose job: build the brief, run the agent, validate, store, notify with a signed link. |
-| T-36h → T-45m | Your window. Approve, reject, amend, or ignore. |
-| T-45m | Commit job: **rebuild the context from scratch**, re-validate, submit if still `pending` or `approved`. |
+| T-1h | Propose job: build the brief, run the agent, validate, store, notify with a signed link. |
+| T-1h → T-45m | Your window. Approve, reject, amend, or ignore. It is ~15 minutes. |
+| T-45m | Commit job: **rebuild the context from scratch**, re-validate, submit if still `pending` or `approved`. Re-runs the agent if the team news moved. |
 | T-2m | Hard refusal window. Nothing is submitted this close to the deadline. |
+
+The propose job runs late on purpose. Press conferences and late injury news
+land in the final hours, so a proposal written a day out is guessing at team
+news nobody has given yet. Confirmed XIs are published an hour before kickoff,
+which is *after* the FPL deadline — no setting reaches those.
+
+The cost is a short window, and it has two consequences worth knowing:
+
+- **~15 minutes to review.** If you want longer, raise
+  `PROPOSE_HOURS_BEFORE_DEADLINE` and accept staler team news.
+- **One or two cron ticks in which to fire.** If both are missed, the commit job
+  produces a proposal itself rather than skip the gameweek. Late and unreviewed
+  beats nothing.
+
+### When the team news moves after the proposal
+
+Re-validating can only ever say no, which is not much use when the world changed
+between propose and commit. So at commit time the plan is checked for material
+change — a flagged captain or vice, a transfer target now doubtful or ruled out,
+a starter ruled out — and:
+
+- **Nobody touched it** → the agent re-runs against fresh data, and the new
+  proposal is what gets submitted. There is no human decision to override.
+- **You approved it** → it is *not* re-decided. You said yes to a specific plan
+  and quietly swapping it would make your approval meaningless. If the news has
+  broken it, execution is blocked and you are notified.
+
+A flagged captain is a warning while proposing and **fatal at submission**.
+Captaining a 75% player can be a considered call when you are looking at it; it
+is not something to do unattended at the deadline.
 
 ## Proposal states
 

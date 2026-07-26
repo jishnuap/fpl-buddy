@@ -107,8 +107,13 @@ def test_timezone_comes_from_settings(settings, orch):
 
 
 def test_booting_inside_the_propose_window_catches_up(scheduler, fake_client):
-    """Deployed at T-6h: propose shortly, don't skip the gameweek."""
-    set_deadline(fake_client, datetime.now(UTC) + timedelta(hours=6))
+    """Booted after the window opened: propose shortly, don't skip the gameweek.
+
+    The deadline here is 50 minutes out, which with a one-hour propose window
+    puts the propose time ten minutes in the past and the commit time five
+    minutes in the future.
+    """
+    set_deadline(fake_client, datetime.now(UTC) + timedelta(minutes=50))
     scheduler.reanchor()
 
     times = job_times(scheduler)
@@ -118,7 +123,7 @@ def test_booting_inside_the_propose_window_catches_up(scheduler, fake_client):
 
 
 def test_catch_up_does_not_re_propose_when_one_already_exists(scheduler, fake_client, orch):
-    set_deadline(fake_client, datetime.now(UTC) + timedelta(hours=6))
+    set_deadline(fake_client, datetime.now(UTC) + timedelta(minutes=50))
     orch.propose()
 
     scheduler.reanchor()

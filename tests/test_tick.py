@@ -69,6 +69,19 @@ def _at(bootstrap, settings, *, before_deadline: timedelta) -> datetime:
     return plan.deadline - before_deadline
 
 
+def _in_propose_window(bootstrap, settings) -> datetime:
+    """Halfway between the propose and commit times.
+
+    Derived from the settings rather than written as a fixed number of hours:
+    the window is configurable and has already been narrowed once, and a test
+    that hardcodes "30 hours out" silently stops testing the propose path the
+    moment the window moves.
+    """
+    plan = plan_for(bootstrap, settings)
+    assert plan.propose_at and plan.commit_at
+    return plan.propose_at + (plan.commit_at - plan.propose_at) / 2
+
+
 # ----------------------------------------------------------------- the table
 
 
@@ -100,7 +113,7 @@ def test_a_stale_anchor_is_refreshed_even_when_nothing_is_due(bootstrap, setting
 
 
 def test_inside_the_propose_window_it_proposes(bootstrap, settings, ledger):
-    now = _at(bootstrap, settings, before_deadline=timedelta(hours=30))
+    now = _in_propose_window(bootstrap, settings)
     orchestrator = FakeOrchestrator(bootstrap)
 
     report = run_tick(settings, now=now, ledger=ledger, orchestrator=orchestrator)
@@ -110,7 +123,7 @@ def test_inside_the_propose_window_it_proposes(bootstrap, settings, ledger):
 
 
 def test_it_does_not_propose_twice_for_the_same_gameweek(bootstrap, settings, ledger):
-    now = _at(bootstrap, settings, before_deadline=timedelta(hours=30))
+    now = _in_propose_window(bootstrap, settings)
     orchestrator = FakeOrchestrator(bootstrap)
 
     run_tick(settings, now=now, ledger=ledger, orchestrator=orchestrator)
@@ -119,14 +132,30 @@ def test_it_does_not_propose_twice_for_the_same_gameweek(bootstrap, settings, le
     assert orchestrator.proposed == 1
 
 
-def test_a_late_first_tick_still_proposes(bootstrap, settings, ledger):
-    """Deploying at T-6h should produce a proposal, not skip the gameweek."""
+def test_before_the_window_opens_it_waits(bootstrap, settings, ledger):
+    """T-6h is now *early*, not late: team news is still to come."""
     now = _at(bootstrap, settings, before_deadline=timedelta(hours=6))
     orchestrator = FakeOrchestrator(bootstrap)
 
     report = run_tick(settings, now=now, ledger=ledger, orchestrator=orchestrator)
 
-    assert PROPOSE in report.ran
+    assert report.ran == [ANCHOR]
+    assert orchestrator.proposed == 0
+
+
+def test_a_missed_propose_window_is_rescued_by_the_commit_job(bootstrap, settings, ledger):
+    """The window is ~15 minutes wide, so a couple of skipped ticks can miss it.
+
+    Losing the gameweek over that would be a poor trade for fresher data, so the
+    commit path acts on an empty store rather than logging and giving up.
+    """
+    now = _at(bootstrap, settings, before_deadline=timedelta(minutes=30))
+    orchestrator = FakeOrchestrator(bootstrap, existing=None)
+
+    report = run_tick(settings, now=now, ledger=ledger, orchestrator=orchestrator)
+
+    assert COMMIT in report.ran
+    assert orchestrator.committed == 1
 
 
 def test_inside_the_commit_window_it_commits(bootstrap, settings, ledger):
@@ -182,7 +211,7 @@ def test_a_failed_anchor_is_reported_and_does_not_raise(bootstrap, settings, led
 
 
 def test_a_held_lease_stops_a_second_tick(bootstrap, settings, ledger):
-    now = _at(bootstrap, settings, before_deadline=timedelta(hours=30))
+    now = _in_propose_window(bootstrap, settings)
     ledger.acquire("the-long-running-one", now=now)
     orchestrator = FakeOrchestrator(bootstrap)
 
@@ -197,7 +226,7 @@ def test_a_held_lease_stops_a_second_tick(bootstrap, settings, ledger):
 
 def test_an_expired_lease_is_taken_over(bootstrap, settings, ledger):
     """A job killed mid-run must not block the schedule until someone notices."""
-    now = _at(bootstrap, settings, before_deadline=timedelta(hours=30))
+    now = _in_propose_window(bootstrap, settings)
     ledger.acquire("the-dead-one", now=now - timedelta(hours=2), ttl_seconds=60)
     orchestrator = FakeOrchestrator(bootstrap)
 
@@ -213,7 +242,7 @@ def test_the_lease_is_released_even_when_a_job_raises(bootstrap, settings, ledge
         def propose(self):
             raise RuntimeError("model refused")
 
-    now = _at(bootstrap, settings, before_deadline=timedelta(hours=30))
+    now = _in_propose_window(bootstrap, settings)
     run_tick(settings, now=now, ledger=ledger, orchestrator=Exploding(bootstrap), owner="one")
 
     assert ledger.read().lease_until == ""

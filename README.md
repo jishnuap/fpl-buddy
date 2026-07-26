@@ -3,13 +3,14 @@
 [![CI](https://github.com/jishnuap/fpl-buddy/actions/workflows/ci.yml/badge.svg)](https://github.com/jishnuap/fpl-buddy/actions/workflows/ci.yml)
 
 A LangChain deep agent that manages a Fantasy Premier League team on a
-propose-then-commit loop: it drafts a plan well before the deadline, waits for a
+propose-then-commit loop: it drafts a plan once the team news is in, waits for a
 human, and — if nobody touches it — submits shortly before the deadline.
 
 ```
-T-36h   build a factual brief -> agent proposes -> deterministic guardrails -> notify
+T-1h    build a factual brief -> agent proposes -> deterministic guardrails -> notify
         (captain, vice, transfers, XI/bench, chip)
 T-45m   still untouched? rebuild the context from scratch, re-validate, submit
+        (and re-run the agent if the team news moved in between)
 ```
 
 The agent never calls a write endpoint. It emits a structured `AgentProposal`;
@@ -74,7 +75,7 @@ request → Request Headers → the whole `cookie` value — into
 `FPL_COOKIE_HEADER`. Programmatic login is not viable off your own machine;
 Premier League's bot protection returns `403` to datacenter IPs.
 
-Because a gameweek cycle (propose at T-36h, commit at T-45m) outlives the access
+Because a gameweek cycle (propose at T-1h, commit at T-45m) can outlive the access
 token, **refresh is load-bearing, not an optimisation.** It happens automatically
 before any request that needs it. Two consequences:
 
@@ -186,7 +187,7 @@ scheduled proposal and then forgotten. A 📝 reaction confirms it was seen.
 ## Safety model
 
 - Re-validate at execution time against a **freshly built** context, never the
-  stored one. Prices and injury flags move in 36 hours.
+  stored one. Prices and injury flags move, even within the hour.
 - No POST inside `EXECUTION_CUTOFF` (2 min) of the deadline — a request that
   lands late leaves you unable to tell whether it applied.
 - `MAX_POINTS_HIT=0` by default: never takes a hit unless you raise it.
