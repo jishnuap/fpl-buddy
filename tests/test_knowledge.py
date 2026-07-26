@@ -27,6 +27,8 @@ from fpl_buddy.knowledge.store import (
 )
 from fpl_buddy.knowledge.summarize import ArticleSummary, resolve_players
 
+from .conftest import FIXTURE_DIR
+
 HOST = "https://news.example.test"
 
 
@@ -396,6 +398,106 @@ def test_a_navigation_only_page_is_not_usable():
 def test_a_stub_article_is_not_usable():
     article = extract(article_html("Tiny", "Too short."), f"{HOST}/2026/07/25/x")
     assert article is None or not article.usable
+
+
+# ----------------------------------------------------------------------- titles
+#
+# The headline is what the agent reads in the article index when it picks which
+# piece to open, so a wrong one is not cosmetic: twelve articles filed under
+# "Join Our Leagues" are twelve articles it cannot tell apart.
+
+FFS_URL = (
+    "https://www.fantasyfootballscout.co.uk/2026/07/24"
+    "/best-4-0m-defenders-for-fpl-2026-27-all-46-assessed"
+)
+
+
+def test_the_headline_wins_over_a_promo_widget_in_rendered_main_content():
+    """The regression: every Fantasy Football Scout article stored as "Join Our
+    Leagues".
+
+    Firecrawl's `only_main_content` HTML arrives with the `<head>` stripped --
+    no og:title, no JSON-LD, no usable `<title>` -- and trafilatura's
+    metadata.title then falls back to the first heading in the fragment, which
+    on this site is a mini-league promo sitting above the article.
+    """
+    html = (FIXTURE_DIR / "fantasy-football-scout-article.html").read_text(encoding="utf-8")
+
+    article = extract(html, FFS_URL)
+
+    assert article is not None
+    assert article.title == "Best £4.0m defenders for FPL 2026/27: All 46 assessed"
+    assert article.usable
+
+
+def test_an_svg_title_is_not_mistaken_for_the_pages_title():
+    """The `<title>` fallback used to match anywhere in the document, and the
+    only one left in that stripped fragment belongs to an inline icon."""
+    html = (FIXTURE_DIR / "fantasy-football-scout-article.html").read_text(encoding="utf-8")
+
+    article = extract(html, FFS_URL)
+
+    assert article is not None and article.title != "mobile"
+
+
+def test_the_publishers_own_og_title_beats_a_heading():
+    body = "Haaland is the obvious captain this week. " * 20
+    html = f"""<!doctype html><html><head><title>Site</title>
+    <meta property="og:title" content="Five things we learned"></head><body>
+    <h1>Latest news</h1><article><h2>Sidebar heading</h2><p>{body}</p></article>
+    </body></html>"""
+
+    article = extract(html, f"{HOST}/2026/07/25/x")
+
+    assert article is not None and article.title == "Five things we learned"
+
+
+def test_a_json_ld_headline_is_read_from_the_graph():
+    """Publishers nest the article node alongside ones for the site and the
+    author, so the site's name is right there to be picked by mistake."""
+    body = "Haaland is the obvious captain this week. " * 20
+    graph = (
+        '{"@context":"https://schema.org","@graph":['
+        '{"@type":"WebSite","name":"News Example"},'
+        '{"@type":"Article","headline":"Nine first impressions of the prices"}]}'
+    )
+    html = f"""<!doctype html><html><head><title>News Example</title>
+    <script type="application/ld+json">{graph}</script></head><body>
+    <div>Join Our Leagues</div><article><p>{body}</p></article></body></html>"""
+
+    article = extract(html, f"{HOST}/2026/07/25/x")
+
+    assert article is not None and article.title == "Nine first impressions of the prices"
+
+
+def test_a_site_name_suffix_is_trimmed_off_the_title_fallback():
+    body = "Haaland is the obvious captain this week. " * 20
+    html = f"""<!doctype html><html><head>
+    <title>Best value FPL players for 2026/27 | Fantasy Football Scout</title>
+    </head><body><div><p>{body}</p></div></body></html>"""
+
+    article = extract(html, f"{HOST}/2026/07/25/x")
+
+    assert article is not None and article.title == "Best value FPL players for 2026/27"
+
+
+def test_a_headline_that_contains_a_dash_survives():
+    """The suffix trim is timid on purpose: what is left has to look like a
+    headline in its own right."""
+    body = "Haaland is the obvious captain this week. " * 20
+    html = f"""<!doctype html><html><head><title>Salah - or Haaland?</title>
+    </head><body><div><p>{body}</p></div></body></html>"""
+
+    article = extract(html, f"{HOST}/2026/07/25/x")
+
+    assert article is not None and article.title == "Salah - or Haaland?"
+
+
+def test_a_page_with_no_title_anywhere_falls_back_to_its_url():
+    body = "Haaland is the obvious captain this week. " * 20
+    article = extract(f"<html><body><div><p>{body}</p></div></body></html>", f"{HOST}/2026/07/25/x")
+
+    assert article is not None and article.title == f"{HOST}/2026/07/25/x"
 
 
 # -------------------------------------------------------------------------- store

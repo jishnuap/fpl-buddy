@@ -9,11 +9,14 @@ the result is labelled ``partial`` and the agent is told which it is.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass
+from typing import Any
 
 import trafilatura
+from lxml import html as lxml_html
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +62,10 @@ def from_markdown(markdown: str, url: str, *, title: str = "", author: str = "",
     extractor would be lossy for no benefit. The paywall and usability checks
     still apply -- a hosted renderer receives the same truncated page a paywall
     serves everyone else.
+
+    The title is the backend's, read off the page's own ``og:title``/``<title>``
+    before it stripped the head, so this path does not share the headline
+    problem ``extract`` had.
     """
     text = _tidy(_strip_markdown(_drop_interstitial(markdown)))
     if not text:
@@ -168,7 +175,7 @@ def extract(html: str, url: str) -> Article | None:
         return None
 
     metadata = trafilatura.extract_metadata(html, default_url=url)
-    title = (getattr(metadata, "title", None) or _title_from_html(html) or url).strip()
+    title = _resolve_title(html, getattr(metadata, "title", None) or "", url)
     author = (getattr(metadata, "author", None) or "").strip()
     published = (getattr(metadata, "date", None) or "").strip()
 
@@ -200,10 +207,151 @@ def _paywall_marker(text: str) -> str:
     return ""
 
 
-def _title_from_html(html: str) -> str:
-    match = re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.S)
-    if not match:
-        return ""
-    import html as html_module
+# --------------------------------------------------------------------- titles
+#
+# The headline is not decoration: it is what the agent reads in the article
+# index when it decides which piece to open. Getting it wrong makes twelve
+# articles indistinguishable.
+#
+# ``trafilatura``'s ``metadata.title`` is not trustworthy enough to lead here.
+# It falls back to the first heading on the page, and a rendering backend hands
+# us *main content* with the ``<head>`` already stripped -- no ``og:title``, no
+# JSON-LD, no real ``<title>``. On Fantasy Football Scout the first heading in
+# that fragment is a promo widget, so every article was stored as "Join Our
+# Leagues". So: the signals a publisher writes deliberately first, then the
+# article's own heading, then ``<title>``, and trafilatura's guess last of all.
+# It sits below ``<title>`` for a second reason -- it splits on a bare dash, so
+# "Salah - or Haaland?" comes back as "Salah".
 
-    return html_module.unescape(re.sub(r"\s+", " ", match.group(1))).strip()
+
+def _resolve_title(html: str, metadata_title: str, url: str) -> str:
+    doc = _parse(html)
+    candidates = (
+        _meta_content(doc, "og:title"),
+        _meta_content(doc, "twitter:title"),
+        _jsonld_headline(doc),
+        _article_heading(doc),
+        _strip_site_suffix(_head_title(doc)),
+        metadata_title,
+    )
+    for candidate in candidates:
+        cleaned = _one_line(candidate)
+        if cleaned:
+            return cleaned
+    return url.strip()
+
+
+def _parse(html: str) -> Any | None:
+    try:
+        return lxml_html.fromstring(html)
+    except Exception:  # noqa: BLE001 - a page we cannot parse still has a URL
+        logger.info("Could not parse HTML for its title; falling back.")
+        return None
+
+
+def _meta_content(doc: Any | None, key: str) -> str:
+    if doc is None:
+        return ""
+    found = doc.xpath(
+        "//meta[@property=$key or @name=$key]/@content", key=key
+    )
+    return str(found[0]) if found else ""
+
+
+_ARTICLE_LD_TYPES = ("Article", "NewsArticle", "BlogPosting", "Report")
+
+
+def _jsonld_headline(doc: Any | None) -> str:
+    """The ``headline`` of the first schema.org article node on the page.
+
+    Publishers nest these under ``@graph`` alongside nodes for the site, the
+    breadcrumbs and the author, so the type check is what keeps us from
+    returning the organisation's name as the headline.
+    """
+    if doc is None:
+        return ""
+    for block in doc.xpath('//script[@type="application/ld+json"]/text()'):
+        try:
+            payload = json.loads(block)
+        except ValueError:
+            continue
+        for node in _ld_nodes(payload):
+            types = node.get("@type", "")
+            types = types if isinstance(types, list) else [types]
+            if not any(t in _ARTICLE_LD_TYPES for t in types if isinstance(t, str)):
+                continue
+            headline = node.get("headline") or node.get("name")
+            if isinstance(headline, str) and headline.strip():
+                return headline
+    return ""
+
+
+def _ld_nodes(payload: Any) -> list[dict]:
+    if isinstance(payload, dict):
+        nodes = [payload]
+        for key in ("@graph", "mainEntity", "mainEntityOfPage"):
+            nodes.extend(_ld_nodes(payload.get(key)))
+        return nodes
+    if isinstance(payload, list):
+        return [node for item in payload for node in _ld_nodes(item)]
+    return []
+
+
+# Tried in order. The heading levels come last because a theme is free to mark
+# its headline up as an ``h2`` -- Fantasy Football Scout does -- so the level
+# says less than being inside the article element does.
+_HEADING_XPATHS = (
+    '//*[@itemprop="headline"]',
+    '//*[contains(concat(" ", normalize-space(@class), " "), " entry-title ")]',
+    "//article//h1",
+    "//main//h1",
+    "//article//h2",
+)
+
+
+def _article_heading(doc: Any | None) -> str:
+    if doc is None:
+        return ""
+    for xpath in _HEADING_XPATHS:
+        for node in doc.xpath(xpath):
+            text = _one_line(node.text_content())
+            if text:
+                return text
+    return ""
+
+
+def _head_title(doc: Any | None) -> str:
+    """``<head><title>``, not any ``<title>``.
+
+    SVG has a ``<title>`` element too, and a site icon inlined in the body of a
+    stripped-down fragment will happily answer with "mobile".
+    """
+    if doc is None:
+        return ""
+    found = doc.xpath("//head/title/text()")
+    return str(found[0]) if found else ""
+
+
+# " | Fantasy Football Scout", " - The Athletic", " – FPL Harry".
+_TITLE_SEPARATOR = re.compile(r"\s+[|–—·]\s+|\s+-\s+")
+
+
+def _strip_site_suffix(title: str) -> str:
+    """Drop a trailing site name from a ``<title>``.
+
+    Deliberately timid, because a headline may legitimately contain a dash: the
+    tail only goes when what precedes it is long enough to stand on its own as
+    a headline and longer than the tail itself.
+    """
+    separators = list(_TITLE_SEPARATOR.finditer(title))
+    if not separators:
+        return title
+    last = separators[-1]
+    head, tail = title[: last.start()].strip(), title[last.end() :].strip()
+    if len(head) >= 25 and len(tail) <= 60 and len(tail) < len(head):
+        return head
+    return title
+
+
+def _one_line(text: str) -> str:
+    return re.sub(r"\s+", " ", text or "").strip()
