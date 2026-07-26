@@ -190,8 +190,11 @@ class _FakeChannel:
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
-    async def send(self, **kwargs):
-        self.calls.append(kwargs)
+    async def send(self, content: str = "", **kwargs):
+        # discord.py takes the message body positionally, which is how the
+        # plain-text path calls it. Accepting only kwargs made that path
+        # untestable -- and it is the one the harvest summary uses.
+        self.calls.append({"content": content, **kwargs})
         return object()
 
 
@@ -346,3 +349,52 @@ async def test_on_message_ignores_blank_content(bot):
     await bot.on_message(message)
     assert bot.orchestrator.notes.added == []
     assert message.reactions == []
+
+
+# ------------------------------------------------------- channel routing
+#
+# The gateway notifier and the HTTPS one must not disagree about where the
+# harvest digest goes, so both ask Settings.discord_channel_for().
+
+
+class _ChannelRecordingBot(_FakeBot):
+    def __init__(self, loop, channel):
+        super().__init__(loop, channel)
+        self.asked_for: list[int] = []
+
+    def get_channel(self, channel_id: int):
+        self.asked_for.append(channel_id)
+        return self._channel
+
+
+def test_the_harvest_summary_is_sent_to_the_harvest_channel(background_loop, settings):
+    settings.notify_channel = "discord"
+    settings.discord_channel_id = 123
+    settings.discord_harvest_channel_id = 456
+    bot = _ChannelRecordingBot(background_loop, _FakeChannel())
+
+    DiscordNotifier(bot, settings).send("FPL harvest: 2 new", "...", meta={"kind": "harvest"})
+
+    assert bot.asked_for == [456]
+
+
+def test_a_proposal_embed_still_goes_to_the_main_channel(background_loop, context, settings):
+    settings.notify_channel = "discord"
+    settings.discord_channel_id = 123
+    settings.discord_harvest_channel_id = 456
+    bot = _ChannelRecordingBot(background_loop, _FakeChannel())
+
+    DiscordNotifier(bot, settings).notify_proposal(stored(context), settings)
+
+    assert bot.asked_for == [123]
+
+
+def test_without_a_harvest_channel_everything_shares_the_main_one(background_loop, settings):
+    settings.notify_channel = "discord"
+    settings.discord_channel_id = 123
+    settings.discord_harvest_channel_id = 0
+    bot = _ChannelRecordingBot(background_loop, _FakeChannel())
+
+    DiscordNotifier(bot, settings).send("subject", "body", meta={"kind": "harvest"})
+
+    assert bot.asked_for == [123]

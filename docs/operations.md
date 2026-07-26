@@ -133,6 +133,11 @@ Failures are always shown, truncated but never hidden: a source that has quietly
 broken looks exactly like a quiet news day otherwise. The article list is capped
 at 12 because Discord rejects a message over 2000 characters outright.
 
+On Discord it goes to `DISCORD_HARVEST_CHANNEL_ID` when that is set, and shares
+`DISCORD_CHANNEL_ID` when it is not. Worth splitting: the digest arrives every
+morning and proposals arrive once a week, so sharing a channel teaches you to
+swipe away the notification that actually has a deadline attached.
+
 Turn it off with `NOTIFY_HARVEST=false`. Send one on demand with
 `fpl-buddy harvest --notify` — off by default there, because running the harvest
 by hand is usually debugging and a message per attempt trains you to ignore them.
