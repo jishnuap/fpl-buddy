@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 
 from ..config import Settings
 from ..fpl.client import FPLClient
-from ..fpl.models import Bootstrap, Fixture, Gameweek, MyTeam
+from ..fpl.models import Bootstrap, Fixture, Gameweek, MyTeam, Player
 from ..knowledge.store import ArticleNote
 from .solio import SolioClient, SolioPlayer, SolioSnapshot, join_to_elements
 
@@ -173,6 +173,93 @@ class DecisionContext:
         rows.sort(key=lambda r: -r[0])
         return [line for _score, line in rows[:limit]]
 
+    def bench_challenger_lines(self, margin: float = 0.0) -> list[str]:
+        """Bench players out-projecting the weakest starter in their position.
+
+        The lineup is the one decision the agent had no evidence for. The squad
+        table lists everyone with a `proj` and a role, but nothing draws the
+        comparison that matters -- is anyone on the bench a better start than
+        someone in the XI -- so the XI came back unchanged every time, which
+        looks like a decision and is not one.
+
+        Same position only, because that is the swap that keeps the formation
+        legal without reshuffling anything else. A cross-position change is
+        available to the agent, it just is not a like-for-like comparison and
+        does not belong in a list of them.
+
+        A flagged starter is listed whatever the projections say: the number
+        will not have caught up with an injury announced this morning, which is
+        exactly the case where a human would look at the bench.
+        """
+        # Solio publishes leaderboards, not a player table, so most of a squad --
+        # and nearly every bench player, who is on the bench precisely because he
+        # is unremarkable -- has no Solio row at all. Gating this on a Solio
+        # projection would mean the section almost never appeared, which is the
+        # same as not having it. FPL's own ep_next is the fallback, exactly as it
+        # is for the captaincy shortlist, and it is the same one-gameweek
+        # quantity so the comparison stays honest.
+        def score(player: Player) -> float | None:
+            value = self.projection_value(player.id)
+            return value if value is not None else player.ep_next
+
+        starters: list[Player] = []
+        bench: list[Player] = []
+        for pick in sorted(self.my_team.picks, key=lambda p: p.position):
+            player = self.bootstrap.player(pick.element)
+            if player is not None:
+                (starters if pick.is_starter else bench).append(player)
+
+        def describe(player: Player, value: float | None) -> str:
+            shown = f"{value:.2f}" if value is not None else "-"
+            source = "proj" if self.projection_value(player.id) is not None else "ep"
+            return f"{player.web_name} ({player.position}) {source} {shown}"
+
+        lines: list[str] = []
+        paired: set[int] = set()
+
+        # A flagged starter first, and regardless of the numbers. This is the
+        # case a human would always check the bench for, and the projection is
+        # the last thing to hear about an injury.
+        for starter in starters:
+            if not starter.is_flagged:
+                continue
+            cover = [b for b in bench if b.position == starter.position]
+            if not cover:
+                continue
+            best = max(cover, key=lambda p: score(p) or 0.0)
+            paired.add(best.id)
+            lines.append(
+                f"  FLAGGED {describe(starter, score(starter))} is in the XI -- "
+                f"cover on the bench: {describe(best, score(best))} "
+                f"| ids {best.id} in / {starter.id} out"
+            )
+
+        # Then anyone simply out-projecting the weakest starter they could
+        # replace. Keepers are left out: the reserve exists for auto-subs, and
+        # changing keeper is never a decision made on a tenth of a point.
+        for challenger in bench:
+            if challenger.position == "GKP" or challenger.id in paired:
+                continue
+            challenger_value = score(challenger)
+            if challenger_value is None:
+                continue
+            rivals = [
+                s for s in starters if s.position == challenger.position and not s.is_flagged
+            ]
+            if not rivals:
+                continue
+            weakest = min(rivals, key=lambda p: score(p) or 0.0)
+            weakest_value = score(weakest) or 0.0
+            if challenger_value <= weakest_value + margin:
+                continue
+            lines.append(
+                f"  {describe(challenger, challenger_value)} on the bench outscores "
+                f"{describe(weakest, weakest_value)} in the XI by "
+                f"{challenger_value - weakest_value:.2f} "
+                f"| ids {challenger.id} in / {weakest.id} out"
+            )
+        return lines
+
     def projection_value(self, element_id: int) -> float | None:
         if self.solio is None:
             return None
@@ -253,6 +340,20 @@ class DecisionContext:
                 "not listed here. Work out the armband against the squad you will actually end "
                 "up with.",
                 *candidates,
+            ]
+
+        challengers = self.bench_challenger_lines()
+        if challengers:
+            parts += [
+                "",
+                "## Bench players who may deserve a start",
+                "Same position as the weakest starter they are compared against, so each swap "
+                "keeps the formation legal on its own. A FLAGGED starter is listed whatever the "
+                "projections say, because a projection has not priced in news from this morning.",
+                "This is a prompt to look, not an instruction. Projections this close together "
+                "are noise, and churning the XI for a tenth of a point costs you the one thing "
+                "the bench is for. Change it when you can say why in a sentence.",
+                *challengers,
             ]
 
         news = self.news_lines()

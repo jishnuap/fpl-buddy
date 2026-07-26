@@ -98,6 +98,23 @@ class AgentProposal(BaseModel):
             "Empty to leave the bench untouched."
         ),
     )
+    # The lineup is a decision, not just a constraint to satisfy, so it carries
+    # its reasoning the way captaincy and transfers do. Kept flat rather than
+    # wrapped in a LineupDecision beside CaptaincyDecision: the two lists are
+    # read by the validator, the executor and the staleness check, and nesting
+    # them would churn every one of those call sites to no behavioural end.
+    lineup_reason: str = Field(
+        default="",
+        description=(
+            "Why this XI and this bench order. Name anyone you benched or promoted "
+            "and say what decided it. If you left the lineup as it was, say that and "
+            "why -- 'no change' is a real answer and a useful one."
+        ),
+    )
+    lineup_alternatives: list[str] = Field(
+        default_factory=list,
+        description="Line-up changes you considered and rejected, one per entry.",
+    )
     chip: str | None = Field(
         default=None,
         description="One of wildcard, freehit, bboost, 3xc -- or null. Default to null.",
@@ -137,6 +154,17 @@ class Proposal(BaseModel):
     agent: AgentProposal
     validation_issues: list[ValidationIssue] = Field(default_factory=list)
 
+    # The lineup as it stood when the agent was asked. Recorded here rather than
+    # re-derived at render time because a proposal is reviewed long after it was
+    # written, and "what would change if I approve this" has to be answerable
+    # from the stored record alone -- not from whatever the squad looks like now.
+    previous_starting_xi: list[int] = Field(default_factory=list)
+    previous_bench_order: list[int] = Field(default_factory=list)
+    squad_names: dict[int, str] = Field(
+        default_factory=dict,
+        description="Element id -> display name, so a stored proposal renders without a fetch.",
+    )
+
     # Audit trail
     context_snapshot: str = Field(default="", description="The brief the agent reasoned over.")
     agent_transcript: str = Field(default="", description="Trimmed agent reasoning, for review.")
@@ -160,6 +188,40 @@ class Proposal(BaseModel):
     @property
     def fatal_issues(self) -> list[ValidationIssue]:
         return [i for i in self.validation_issues if i.fatal]
+
+    def name_for(self, element_id: int) -> str:
+        return self.squad_names.get(element_id) or f"id={element_id}"
+
+    def lineup_changes(self) -> tuple[list[str], list[str]]:
+        """``(promoted, benched)`` names, comparing the proposed XI to the old one.
+
+        Players arriving or leaving by transfer are deliberately excluded. A
+        bought player appearing in the XI is not a substitution decision, it is
+        the transfer you already read about two lines up, and listing it as one
+        buries the real change -- a fit player being dropped -- in noise.
+        """
+        if not self.agent.starting_xi or not self.previous_starting_xi:
+            return [], []
+        before, after = set(self.previous_starting_xi), set(self.agent.starting_xi)
+        moved_in = {move.element_in for move in self.agent.transfers}
+        moved_out = {move.element_out for move in self.agent.transfers}
+        promoted = sorted(after - before - moved_in)
+        benched = sorted(before - after - moved_out)
+        return (
+            [self.name_for(element_id) for element_id in promoted],
+            [self.name_for(element_id) for element_id in benched],
+        )
+
+    def bench_order_changed(self) -> bool:
+        """Order is the whole point of the bench, so compare it as a sequence."""
+        if not self.agent.bench_order or not self.previous_bench_order:
+            return False
+        moved = {m.element_in for m in self.agent.transfers} | {
+            m.element_out for m in self.agent.transfers
+        }
+        before = [e for e in self.previous_bench_order if e not in moved]
+        after = [e for e in self.agent.bench_order if e not in moved]
+        return before != after
 
     def touch(self, status: ProposalStatus | None = None) -> None:
         if status is not None:

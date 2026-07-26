@@ -172,6 +172,38 @@ def safe_notify_harvest(notifier: Notifier, report, settings: Settings) -> None:
 # --------------------------------------------------------------------- rendering
 
 
+def lineup_lines(proposal: Proposal) -> list[str]:
+    """The XI change, as a diff rather than a roster.
+
+    The whole XI is fifteen names the reader already knows and will skim; the
+    two that moved are the decision. Rendering the change rather than the list
+    is what makes this reviewable at all -- before this, the lineup was decided
+    by the agent, submitted by the executor, and never shown to anyone.
+
+    Silence would be ambiguous here in a way it is not elsewhere: "no line-up
+    section" and "the line-up is unchanged" are different claims, and only one
+    of them is safe to approve without looking. So an unchanged lineup says so.
+    """
+    if not proposal.agent.starting_xi or not proposal.previous_starting_xi:
+        return []
+
+    promoted, benched = proposal.lineup_changes()
+    if not promoted and not benched:
+        if proposal.bench_order_changed():
+            return ["Line-up:      XI unchanged, bench order changed"]
+        return ["Line-up:      unchanged"]
+
+    parts = []
+    if promoted:
+        parts.append("start " + ", ".join(promoted))
+    if benched:
+        parts.append("bench " + ", ".join(benched))
+    line = ["Line-up:      " + "; ".join(parts)]
+    if proposal.bench_order_changed():
+        line.append("              (bench order also changed)")
+    return line
+
+
 def render_proposal(proposal: Proposal, settings: Settings) -> tuple[str, str, str]:
     """``(subject, plain text, html)`` for one proposal."""
     agent = proposal.agent
@@ -204,6 +236,7 @@ def render_proposal(proposal: Proposal, settings: Settings) -> tuple[str, str, s
         lines.append(f"Hit:          -{agent.points_hit}")
     if agent.chip:
         lines.append(f"Chip:         {agent.chip}")
+    lines += lineup_lines(proposal)
     lines += [
         f"Confidence:   {agent.confidence:.0%}",
         "",
@@ -215,6 +248,8 @@ def render_proposal(proposal: Proposal, settings: Settings) -> tuple[str, str, s
     for move in agent.transfers:
         if move.reason:
             lines.append(f"Transfer:     {move.reason}")
+    if agent.lineup_reason:
+        lines.append(f"Line-up:      {agent.lineup_reason}")
     if agent.risks:
         lines += ["", "Risks:", *(f"  - {r}" for r in agent.risks)]
 

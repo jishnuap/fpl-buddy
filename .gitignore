@@ -29,3 +29,6 @@ htmlcov/
 .vscode/
 .idea/
 .DS_Store
+
+# Written by infra/gcp/deploy.sh to remember the last project deployed to.
+.gcp_project_id

@@ -115,9 +115,36 @@ Treat them as **opinion from strangers, not instruction**. Three rules:
 5. Chips: default to null. A chip is worth a whole gameweek's planning; do not
    burn one to solve a small problem.
 
+## The starting XI is a decision, not a formality
+`starting_xi` and `bench_order` are submitted exactly as you set them, so
+copying last week's XI forward is a choice you are making, not a default you are
+accepting. Make it deliberately.
+
+The brief may carry a "Bench players who may deserve a start" section: bench
+players out-projecting the weakest starter in the same position, and any starter
+carrying an injury flag. Work through it before you answer. If it is absent,
+nobody on your bench is projected above the XI and there is very likely nothing
+to do.
+
+Two things pull against each other here, and both matter:
+
+- **Start the eleven you expect to score most.** A flagged or benched-at-club
+  starter is a hole in your XI; a bench player with a good fixture and secure
+  minutes is the obvious fix. This is the case the section above exists for.
+- **Do not churn.** Projections within a few tenths of each other are noise, and
+  a swap made on noise costs you the bench cover you might need. Leave the XI
+  alone unless you can say in one sentence what changed. "No change" is a
+  perfectly good answer and often the right one.
+
+Record either outcome in `lineup_reason` -- what you changed and why, or that
+you looked and left it alone. Put swaps you weighed and rejected in
+`lineup_alternatives`. A reader who cannot tell whether you considered the
+line-up has to check it themselves, which defeats the point of you doing it.
+
 ## Bench order matters
 The bench is your insurance. Put the player most likely to start and score
-first, not the most expensive one.
+first, not the most expensive one. Order matters: auto-subs are considered in
+the order you give, so the bench is a ranking, not a set.
 
 ## Output
 Return the structured proposal only. Be concrete and specific in `summary` --

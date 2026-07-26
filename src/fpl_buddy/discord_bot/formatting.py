@@ -90,6 +90,25 @@ def build_embed(proposal: Proposal, settings: Settings) -> discord.Embed:
     else:
         embed.add_field(name="Transfers", value="None (rolling)", inline=False)
 
+    # The XI is submitted whether or not anyone looks at it, so it gets a field
+    # of its own -- including when nothing moved, because "unchanged" and "not
+    # shown" are different claims and only one is safe to approve unread.
+    promoted, benched = proposal.lineup_changes()
+    if proposal.agent.starting_xi and proposal.previous_starting_xi:
+        if promoted or benched:
+            value = "\n".join(
+                ([f"IN:  {', '.join(promoted)}"] if promoted else [])
+                + ([f"OUT: {', '.join(benched)}"] if benched else [])
+                + (["Bench order also changed"] if proposal.bench_order_changed() else [])
+            )
+        elif proposal.bench_order_changed():
+            value = "XI unchanged, bench order changed"
+        else:
+            value = "Unchanged"
+        if proposal.agent.lineup_reason:
+            value += f"\n{proposal.agent.lineup_reason}"
+        embed.add_field(name="Line-up", value=_clip(value), inline=False)
+
     if agent.risks:
         embed.add_field(
             name="Risks", value=_clip("\n".join(f"• {r}" for r in agent.risks)), inline=False

@@ -21,7 +21,7 @@ from .agent.prompts import amendment_prompt
 from .config import Settings
 from .data.context import DecisionContext, build_context
 from .decisions.executor import ExecutionBlocked, execute
-from .decisions.schema import Proposal, ProposalStatus
+from .decisions.schema import AgentProposal, Proposal, ProposalStatus
 from .decisions.staleness import material_changes, rethink_instruction
 from .decisions.store import ProposalStore, build_store
 from .decisions.validate import validate
@@ -88,6 +88,7 @@ class Orchestrator:
             validation_issues=issues,
             context_snapshot=context.render(),
             agent_transcript=transcript,
+            **_lineup_snapshot(context, agent_proposal),
         )
         self.store.save(proposal)
         if pending_notes:
@@ -143,6 +144,7 @@ class Orchestrator:
             human_note=note,
             revision=previous.revision + 1,
             supersedes=previous.id,
+            **_lineup_snapshot(context, agent_proposal),
         )
         self.store.save(revised)
         self.store.supersede_open_proposals(context.gameweek.id, except_id=revised.id)
@@ -308,6 +310,34 @@ class Orchestrator:
 def _new_id(gameweek: int) -> str:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S")
     return f"gw{gameweek:02d}-{stamp}-{uuid.uuid4().hex[:6]}"
+
+
+def _lineup_snapshot(context: DecisionContext, agent_proposal: AgentProposal) -> dict:
+    """What the lineup looked like before this proposal, plus names to render it.
+
+    Both are frozen into the stored proposal on purpose. A proposal is reviewed
+    hours after it was written and possibly after the squad has moved on, so
+    "what changes if I approve this" has to be answerable from the record
+    itself. Re-deriving it at render time would quietly answer a different
+    question.
+    """
+    picks = sorted(context.my_team.picks, key=lambda pick: pick.position)
+
+    wanted = {pick.element for pick in picks}
+    wanted |= set(agent_proposal.starting_xi) | set(agent_proposal.bench_order)
+    wanted |= {move.element_in for move in agent_proposal.transfers}
+
+    names: dict[int, str] = {}
+    for element_id in wanted:
+        player = context.bootstrap.player(element_id)
+        if player is not None:
+            names[element_id] = player.web_name
+
+    return {
+        "previous_starting_xi": [p.element for p in picks if p.is_starter],
+        "previous_bench_order": [p.element for p in picks if not p.is_starter],
+        "squad_names": names,
+    }
 
 
 def _notes_instruction(notes: list[Note]) -> str:
