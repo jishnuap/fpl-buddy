@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from fpl_buddy.config import Settings
+from fpl_buddy.data.airsenal import AirsenalSnapshot
 from fpl_buddy.data.context import DecisionContext
 from fpl_buddy.data.solio import join_to_elements, parse_snapshot
 from fpl_buddy.decisions.schema import AgentProposal, CaptaincyDecision, Proposal, TransferMove
@@ -84,6 +85,25 @@ def fixtures_list() -> list[Fixture]:
 def future_fixtures_list() -> list[Fixture]:
     """Every unplayed fixture, GW4-GW8 -- what ``?future=1`` returns."""
     return [Fixture.model_validate(f) for f in load_json("fixtures-future.json")]
+
+
+def load_airsenal(hours_old: float = 6.0) -> dict:
+    """The AIrsenal fixture with its timestamp pinned relative to *now*.
+
+    Same treatment as the gameweek deadline: the reader drops anything older
+    than AIRSENAL_MAX_AGE_HOURS, so a fixture with a hard-coded date would go
+    from passing to failing on its own after 36 hours.
+    """
+    raw = load_json("airsenal-predictions.json")
+    raw["generated_at"] = (datetime.now(UTC) - timedelta(hours=hours_old)).isoformat()
+    return raw
+
+
+@pytest.fixture
+def airsenal() -> AirsenalSnapshot:
+    """The fixture snapshot sliced to the horizon, as build_context would."""
+    snapshot = AirsenalSnapshot.model_validate(load_airsenal())
+    return snapshot.restricted_to([NEXT_GAMEWEEK, NEXT_GAMEWEEK + 1, NEXT_GAMEWEEK + 2])
 
 
 @pytest.fixture

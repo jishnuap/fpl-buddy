@@ -98,6 +98,7 @@ The brief is built fresh each run from:
 | `fixtures?future=1` | The fixture run over the next `FIXTURE_HORIZON_GAMEWEEKS` (default 5), not just the gameweek being submitted |
 | `team/set-piece-notes` | FPL's official set-piece notes, when published |
 | Solio Analytics | Projection leaderboards — treated as signal, never as the source of truth for ids or prices |
+| AIrsenal | Expected points per player per gameweek from a model fitted overnight in a [sidecar container](sidecar/airsenal) — a second, independent projection |
 
 There is no Understat or FBref scraper here on purpose: the FPL API already
 serves the Opta xG family, so the underlying numbers come from an endpoint that
@@ -220,10 +221,13 @@ src/fpl_buddy/
   notes.py           notes captured from Discord, folded into the next proposal
   knowledge/         daily article harvest: sources, crawl, extract, summarise,
                      markdown store the agent reads on demand
+sidecar/airsenal/    the AIrsenal model, in its own image on its own schedule;
+                     talks to fpl_buddy through one JSON file and nothing else
   cli.py             typer entrypoints
 ```
 
 Docs: [deployment](docs/deployment.md) ·
+[the AIrsenal prediction sidecar](docs/airsenal.md) ·
 [running it without an always-on container](docs/serverless.md) ·
 [day-to-day operations](docs/operations.md) ·
 [verifying the write payloads](docs/verify-payloads.md) ·

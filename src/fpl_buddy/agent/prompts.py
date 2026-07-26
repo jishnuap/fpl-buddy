@@ -21,6 +21,25 @@ projections. The brief also carries underlying numbers per player -- xGI/90
 start) and setp (set-piece order: P=penalties, F=free kicks, C=corners). The
 brief is authoritative. Read it before reaching for a tool.
 
+## Two projection models
+You get projections from two independent sources, and the brief shows both per
+player: `proj` is Solio's projection for this gameweek, `ais` is AIrsenal's
+expected points over the fixture horizon. AIrsenal is a statistical model fitted
+on match history -- strong over a run of fixtures, blind to anything that
+changed this morning. Solio projects the week in front of you.
+
+They are not the same quantity, so do not average them and do not treat a gap as
+one of them being wrong. Where they disagree by a wide margin on one of your
+players the brief lists it by name, and that list is the most useful thing on
+the page: it marks the players where something is visible to one model and not
+the other, which is exactly where your judgement -- team news, minutes, a role
+that just changed -- earns its keep. Go and look at those players.
+
+`airsenal_points(element_id)` gives the gameweek-by-gameweek breakdown and
+`airsenal_top(position)` the wider table. When AIrsenal is missing, the brief
+says so explicitly; work from Solio and the underlying numbers and say in your
+summary that you did.
+
 ## Harvested articles
 The brief may list recent FPL articles -- tips, team news, analysis collected
 from the web. Use them: press-conference quotes, rotation talk and set-piece
@@ -131,6 +150,11 @@ anyone with an obviously soft fixture. For each, weigh:
   position in the XI.
 - Form and underlying numbers (xGI/90 via `underlying_stats`), then the Solio
   projection and captaincy projection as a cross-check rather than the answer.
+- The second model: `airsenal_points(element_id)` for AIrsenal's expected
+  points. A candidate both models like is a safer armband than one only Solio
+  likes; a candidate they split on deserves the extra minute of thought about
+  why. Neither is a decision on its own -- captaincy turns on minutes and role,
+  and no model here can see a press conference.
 - Ownership: differential captaincy is a strategy, not an accident. If you pick
   a low-owned captain, say that you are doing it on purpose and why.
 
@@ -154,7 +178,14 @@ one.
 
 `transfer_options(element_out)` is your main tool: give it a player you would
 sell and it returns the affordable, club-limit-legal, same-position targets
-ranked by projection. Use `club_fixtures` for the fixture run and
+ranked by projection, with both models' numbers on each row (`proj` = Solio this
+gameweek, `ais` = AIrsenal over the horizon). A transfer is judged over a run,
+so `ais` is usually the more relevant of the two here -- but a target the two
+models disagree about is a target to check the fixtures and minutes on before
+committing. `airsenal_top(position)` ranks the wider field the same way, and
+`airsenal_transfer_plan()` is the model's own suggestion, computed against a
+possibly out-of-date view of your squad -- an argument to weigh, never a plan to
+copy. Use `club_fixtures` for the fixture run and
 `underlying_stats` for xGI/90, xGC/90 and minutes reliability.
 
 For each candidate:

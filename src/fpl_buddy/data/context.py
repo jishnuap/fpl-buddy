@@ -16,6 +16,7 @@ from ..config import Settings
 from ..fpl.client import FPLClient
 from ..fpl.models import Bootstrap, Fixture, Gameweek, MyTeam
 from ..knowledge.store import ArticleNote
+from .airsenal import AirsenalSnapshot, load_snapshot
 from .solio import SolioClient, SolioSnapshot, join_to_elements
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,14 @@ class DecisionContext:
     fixtures: list[Fixture]
     solio: SolioSnapshot | None
     solio_unmatched: list[str] = field(default_factory=list)
+    # AIrsenal expected points, written by a sidecar container and read off the
+    # shared volume. A second, independent model: where it and Solio disagree is
+    # worth more to the agent than either number alone. ``airsenal_note`` says
+    # why it is absent when it is -- silence would read as "no opinion".
+    airsenal: AirsenalSnapshot | None = None
+    airsenal_note: str = ""
+    airsenal_disagreement_threshold: float = 1.5
+    airsenal_brief_limit: int = 20
     # Every unplayed fixture inside the configured horizon, not just this
     # gameweek's -- a transfer is judged over a run.
     horizon_fixtures: list[Fixture] = field(default_factory=list)
@@ -48,9 +57,9 @@ class DecisionContext:
     def squad_table(self) -> str:
         lines = [
             "pos | player                    | club | £sell | £now | status | form "
-            "| xGI90 | st90 | setp | proj  | role"
+            "| xGI90 | st90 | setp | proj  | ais   | role"
         ]
-        lines.append("-" * 125)
+        lines.append("-" * 133)
         for pick in sorted(self.my_team.picks, key=lambda p: p.position):
             player = self.bootstrap.player(pick.element)
             if player is None:
@@ -58,6 +67,7 @@ class DecisionContext:
                 continue
             club = self.bootstrap.team(player.team)
             proj = self._proj(pick.element)
+            ais = self._ais(pick.element)
             role = (
                 "(C)"
                 if pick.is_captain
@@ -74,11 +84,14 @@ class DecisionContext:
                 f"| {pick.selling_price / 10:>5.1f} | {player.price:>4.1f} | {status:<6} "
                 f"| {player.form:>4.1f} | {player.expected_goal_involvements_per_90:>5.2f} "
                 f"| {player.starts_per_90:>4.2f} | {player.set_piece_duties or '-':<4} "
-                f"| {proj:>5} | {role} [{player.position}, id={player.id}]"
+                f"| {proj:>5} | {ais:>5} | {role} [{player.position}, id={player.id}]"
             )
         lines.append(
             "xGI90 = expected goal involvements per 90. st90 = starts per 90 "
-            "(minutes reliability). setp = set-piece order (P=pens, F=free kicks, C=corners)."
+            "(minutes reliability). setp = set-piece order (P=pens, F=free kicks, C=corners).",
+            "proj = Solio projection for this gameweek. ais = AIrsenal expected points over "
+            "the horizon -- two independent models, so read them together, not as one number "
+            "twice. Where they disagree sharply it is flagged below.",
         )
         return "\n".join(lines)
 
@@ -130,6 +143,68 @@ class DecisionContext:
         row = self.solio.projection_for(element_id)
         return f"{row.pr_points:.2f}" if row and row.pr_points is not None else "-"
 
+    def _ais(self, element_id: int) -> str:
+        value = self.airsenal_value(element_id)
+        return f"{value:.2f}" if value is not None else "-"
+
+    def airsenal_value(self, element_id: int, gameweek: int | None = None) -> float | None:
+        """AIrsenal expected points: over the loaded horizon, or one gameweek.
+
+        The horizon total is the default because that is what the model is good
+        at. A single-gameweek number from a fixture model is the noisiest thing
+        it produces, and the reason to have it at all is to judge a transfer
+        over a run.
+        """
+        if self.airsenal is None:
+            return None
+        return self.airsenal.points_for(element_id, gameweek)
+
+    def disagreement_lines(self, threshold: float = 1.5) -> list[str]:
+        """Squad players the two projection sources disagree about.
+
+        This is the dividend of having a second model, and the only part of it
+        that is worth spending brief tokens on unprompted. Two models agreeing
+        tells the agent nothing it would not have assumed; two models differing
+        by two points on a captaincy candidate is the single most useful
+        sentence on the page.
+
+        Note the comparison is not quite like for like -- Solio projects this
+        gameweek, AIrsenal a horizon -- so a horizon of one gameweek is the only
+        case where the numbers are directly comparable. Beyond that this is a
+        flag for attention, not an arithmetic claim, and the rendering says so.
+        """
+        if self.airsenal is None or self.solio is None:
+            return []
+        rows: list[tuple[float, str]] = []
+        for pick in self.my_team.picks:
+            solio_value = self.projection_value(pick.element)
+            airsenal_value = self.airsenal_value(pick.element)
+            if solio_value is None or airsenal_value is None:
+                continue
+            gap = airsenal_value - solio_value
+            if abs(gap) < threshold:
+                continue
+            player = self.bootstrap.player(pick.element)
+            if player is None:
+                continue
+            keener = "AIrsenal" if gap > 0 else "Solio"
+            rows.append(
+                (
+                    abs(gap),
+                    f"  id={player.id:<4} {player.web_name:<20} Solio {solio_value:.2f} vs "
+                    f"AIrsenal {airsenal_value:.2f} ({keener} is {abs(gap):.2f} higher)",
+                )
+            )
+        rows.sort(key=lambda r: -r[0])
+        return [line for _gap, line in rows]
+
+    def _label(self, element_id: int) -> str:
+        player = self.bootstrap.player(element_id)
+        if player is None:
+            return f"id={element_id} (UNKNOWN -- not in bootstrap-static)"
+        club = self.bootstrap.team(player.team)
+        return f"{player.web_name} ({club.short_name if club else '?'}, id={player.id})"
+
     def owned_element_ids(self) -> set[int]:
         """The squad as it stands now, before any proposed transfers."""
         return {pick.element for pick in self.my_team.picks}
@@ -156,7 +231,16 @@ class DecisionContext:
             if player is None or player.position == "GKP":
                 continue
             projection = self.projection_value(pick.element)
-            score = projection if projection is not None else (player.ep_next or 0.0)
+            airsenal_value = self.airsenal_value(pick.element)
+            # Ordering still follows Solio where it exists, so adding a second
+            # model does not silently reshuffle a list the prompt already
+            # describes. AIrsenal is the fallback ahead of FPL's own ep_next,
+            # being the better of the two.
+            score = projection
+            if score is None:
+                score = airsenal_value
+            if score is None:
+                score = player.ep_next or 0.0
             club = self.bootstrap.team(player.team)
             flags = " FLAGGED" if player.is_flagged else ""
             bench = "" if pick.is_starter else " (currently benched)"
@@ -166,6 +250,7 @@ class DecisionContext:
                     f"  id={player.id:<4} {player.web_name:<20} "
                     f"({club.short_name if club else '?'}, {player.position}) "
                     f"proj {projection if projection is not None else '-'} "
+                    f"| ais {f'{airsenal_value:.2f}' if airsenal_value is not None else '-'} "
                     f"| ep_next {player.ep_next if player.ep_next is not None else '-'} "
                     f"| setp {player.set_piece_duties or '-'}{flags}{bench}",
                 )
@@ -216,6 +301,18 @@ class DecisionContext:
             "## Your squad",
             self.squad_table(),
         ]
+
+        disagreements = self.disagreement_lines(self.airsenal_disagreement_threshold)
+        if disagreements:
+            parts += [
+                "",
+                "## Where the two projection models disagree about your players",
+                "Solio projects this gameweek; AIrsenal projects the horizon, so these are not "
+                "the same quantity and a gap is not automatically an error. Treat it as a "
+                "pointer: something one model can see and the other cannot. Check the fixture "
+                "run, the minutes and the news before siding with either.",
+                *disagreements,
+            ]
 
         if self.my_team.has_unlimited_transfers:
             parts += [
@@ -285,6 +382,27 @@ class DecisionContext:
         else:
             parts += ["", "NOTE: Solio projections were unavailable for this run."]
 
+        if self.airsenal is not None:
+            parts += [
+                "",
+                self.airsenal.render(
+                    limit=self.airsenal_brief_limit, owned=self.owned_element_ids()
+                ),
+            ]
+            if self.airsenal.transfer_plan is not None:
+                parts += [
+                    "",
+                    "## AIrsenal's own transfer plan",
+                    "An optimiser's output, not an instruction, and it did NOT see your real "
+                    "squad: AIrsenal rebuilds it from the public API, so it reflects your last "
+                    "*published* picks and misses anything you transferred this week. Your "
+                    "actual squad, bank and free transfers are in the brief above and those "
+                    "are the authoritative ones. Use this as an argument to weigh.",
+                    self.airsenal.transfer_plan.render(describe=self._label),
+                ]
+        elif self.airsenal_note:
+            parts += ["", f"NOTE: {self.airsenal_note}"]
+
         return "\n".join(parts)
 
 
@@ -339,6 +457,13 @@ def build_context(settings: Settings, client: FPLClient | None = None) -> Decisi
     except Exception as exc:  # noqa: BLE001 - never let a third party block the run
         logger.warning("Solio fetch failed (%s); continuing without projections.", exc)
 
+    # Read off the shared volume, never computed here -- the model fit takes
+    # minutes and lives in a sidecar container. A missing or stale artefact is
+    # a note in the brief, never a failed run.
+    airsenal, airsenal_note = load_snapshot(
+        settings, gameweek=gameweek.id, horizon=settings.fixture_horizon_gameweeks
+    )
+
     return DecisionContext(
         gameweek=gameweek,
         my_team=my_team,
@@ -346,6 +471,10 @@ def build_context(settings: Settings, client: FPLClient | None = None) -> Decisi
         fixtures=fixtures,
         solio=solio,
         solio_unmatched=unmatched,
+        airsenal=airsenal,
+        airsenal_note=airsenal_note,
+        airsenal_disagreement_threshold=settings.airsenal_disagreement_threshold,
+        airsenal_brief_limit=settings.airsenal_brief_limit,
         horizon_fixtures=horizon,
         horizon_gameweeks=settings.fixture_horizon_gameweeks,
         articles=articles,

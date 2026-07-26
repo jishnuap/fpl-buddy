@@ -282,9 +282,11 @@ def build_tools(
         lines = []
         for player in pool[: min(limit, MAX_ROWS)]:
             projection = context.projection_value(player.id)
+            airsenal_value = context.airsenal_value(player.id)
             lines.append(
                 f"  {_describe(player.id)}"
                 + (f" proj {projection:.2f}" if projection is not None else "")
+                + (f" ais {airsenal_value:.2f}" if airsenal_value is not None else "")
             )
         return header + "\n" + "\n".join(lines)
 
@@ -358,6 +360,9 @@ def build_tools(
         projection = context.projection_value(element_id)
         if projection is not None:
             lines.append(f"  Solio:      proj {projection:.2f}")
+        airsenal_value = context.airsenal_value(element_id)
+        if airsenal_value is not None:
+            lines.append(f"  AIrsenal:   xP {airsenal_value:.2f} over the horizon")
         return "\n".join(lines)
 
     @tool
@@ -404,6 +409,121 @@ def build_tools(
             return f"No available {wanted} at £{max_price:.1f}m or below."
         pool.sort(key=lambda p: (-p.form, -p.total_points))
         return "\n".join(_describe(p.id) for p in pool[: min(limit, MAX_ROWS)])
+
+    # -------------------------------------------------------------- airsenal
+    #
+    # A second projection source, from a model fitted overnight in a separate
+    # container. Every tool here degrades to one clear sentence when there is no
+    # snapshot, because "the model has no opinion" and "there is no model" have
+    # to be distinguishable from inside the agent.
+
+    _AIRSENAL_CAVEAT = (
+        "[AIrsenal is a statistical model fitted on history. It has not seen "
+        "today's team news, and it is at its weakest on anything that changed "
+        "this week.]"
+    )
+
+    def _no_airsenal() -> str:
+        return (
+            "AIrsenal predictions are not loaded for this run"
+            + (f": {context.airsenal_note}" if context.airsenal_note else ".")
+            + " Use the Solio projections and the underlying numbers instead."
+        )
+
+    @tool
+    def airsenal_points(element_id: int) -> str:
+        """AIrsenal's expected points for one player, gameweek by gameweek.
+
+        A second opinion on a player, from a model independent of the Solio
+        projections in the brief. Most useful on a transfer target, where the
+        question is the whole run of fixtures rather than one week. Where this
+        and Solio disagree sharply, that is a prompt to look at why -- minutes,
+        fixture, a role that just changed -- not a reason to average them.
+        """
+        if context.airsenal is None:
+            return _no_airsenal()
+        player = bootstrap.player(element_id)
+        if player is None:
+            return f"Element {element_id} does not exist. Use find_player to get a real id."
+        row = context.airsenal.player(element_id)
+        if row is None:
+            return (
+                f"AIrsenal has no prediction for {player.web_name} (id {element_id}). "
+                "That usually means no fixture in the horizon, or a player it could not map."
+            )
+
+        lines = [
+            _AIRSENAL_CAVEAT,
+            "",
+            f"{player.web_name} ({player.position}) -- AIrsenal expected points",
+            f"  {row.horizon_text()}",
+            f"  Total over the horizon: {row.total:.2f}",
+        ]
+        rank = context.airsenal.rank_of(element_id)
+        if rank is not None:
+            position_rank, pool_size = rank
+            lines.append(f"  Ranked {position_rank} of {pool_size} {row.position}s")
+        projection = context.projection_value(element_id)
+        if projection is not None:
+            lines.append(
+                f"  For comparison, Solio projects {projection:.2f} for this gameweek alone."
+            )
+        return "\n".join(lines)
+
+    @tool
+    def airsenal_top(position: str = "all", limit: int = 15) -> str:
+        """AIrsenal's expected-points table, deeper than the brief shows.
+
+        `position` is GKP, DEF, MID, FWD or 'all'. Ranked by expected points over
+        the whole loaded horizon, so it answers "who is worth owning for the next
+        few weeks" rather than "who hauls on Saturday".
+
+        These are league-wide rankings. Rows are tagged [OWNED] / [not owned] --
+        naming a [not owned] player as captain is an instant validation failure.
+        """
+        if context.airsenal is None:
+            return _no_airsenal()
+        wanted = position.strip().upper()
+        if wanted not in {"ALL", "GKP", "DEF", "MID", "FWD"}:
+            return "Position must be one of GKP, DEF, MID, FWD, or 'all'."
+        rows = context.airsenal.ranked(wanted)[: min(limit, MAX_ROWS)]
+        if not rows:
+            return f"AIrsenal has no predictions for position '{position}' in this snapshot."
+        owned = context.owned_element_ids()
+        header = f"{_AIRSENAL_CAVEAT}\n\n{context.airsenal.provenance_line()}"
+        return (
+            header
+            + "\n"
+            + "\n".join(
+                f"  {i + 1}. {row.summary(owned=row.element_id in owned)}"
+                for i, row in enumerate(rows)
+            )
+        )
+
+    @tool
+    def airsenal_transfer_plan() -> str:
+        """AIrsenal's own suggested transfers, if its optimiser ran.
+
+        Read the provenance line before you weigh it: this plan was computed
+        against the squad AIrsenal rebuilt from the *public* API, which is your
+        last published team. It does not know about transfers you already made
+        this week, and its bank and free-transfer figures are estimates. The
+        squad, bank and free transfers in the brief are the real ones.
+
+        So treat it as an argument from a model that does multi-week expected
+        value well and knows nothing about team news. Verify every id, and check
+        the budget yourself with transfer_options.
+        """
+        if context.airsenal is None:
+            return _no_airsenal()
+        plan = context.airsenal.transfer_plan
+        if plan is None:
+            return (
+                "The AIrsenal sidecar did not emit a transfer plan for this run "
+                "(the optimiser is opt-in). Its per-player predictions are still "
+                "available through airsenal_points and airsenal_top."
+            )
+        return _AIRSENAL_CAVEAT + "\n\n" + plan.render(describe=context._label)
 
     # ------------------------------------------------------------- knowledge
     #
@@ -545,6 +665,9 @@ def build_tools(
         gameweek_fixtures,
         club_fixtures,
         projections,
+        airsenal_points,
+        airsenal_top,
+        airsenal_transfer_plan,
         search_articles,
         read_article,
         articles_about,

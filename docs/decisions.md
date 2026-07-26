@@ -534,3 +534,46 @@ since that process is long-lived and a restart is itself worth hearing about
 again from zero. Manual CLI runs (`fpl-buddy propose` typed by hand) are
 deliberately left out -- same reasoning as `harvest --notify` being opt-in: a
 manual run is presumably already being watched.
+
+**AIrsenal goes behind a file, not behind an import.** The model is worth having
+-- it does multi-week expected points properly, which nothing here did -- but
+`airsenal_run_prediction` is a hierarchical model fit measured in minutes, and
+the package brings jax, a compiler and a git-only dependency with it. Neither
+fits inside a propose window that is one hour wide, and neither fits in an image
+whose idle tick has to stay at ~0.9s. So it runs nightly in its own container
+and leaves `predictions.json` on the shared volume; `data/airsenal.py` reads
+that and nothing else. Its worst day is a stale artefact, which the reader
+detects and drops. See [airsenal.md](airsenal.md).
+
+**AIrsenal never gets FPL credentials, and `run.sh` enforces it.** Given a login
+it will happily POST transfers and set your lineup -- `airsenal_make_transfers`
+and `airsenal_set_lineup` are both entry points it ships. One code path in this
+project writes to FPL and it re-validates against a freshly built context first.
+The sidecar exits 78 if it finds `FPL_LOGIN` or `FPL_PASSWORD`, which turns a
+documented rule into an enforced one. Nothing it needs is behind auth anyway.
+
+**AIrsenal predicts; `my-team` owns the squad.** Without a login AIrsenal
+rebuilds your team from the public API -- your last *published* picks -- and
+warns in its own source that the resulting bank and free-transfer figures "will
+not include any transfers made in the current gameweek". We have the
+authenticated endpoint, so we are right and it is guessing. The sidecar
+therefore emits per-player predictions, and its optimiser output is opt-in and
+stamped `squad_source: public_api_last_published` so the caveat reaches the
+brief rather than dying in a README.
+
+**Disagreement between the two projection models is a first-class section of the
+brief.** Solio and AIrsenal agreeing tells the agent nothing it would not have
+assumed. The interesting rows are the ones where they split by two points,
+because that is where something is visible to one model and not the other, and
+where team news and minutes -- the things the agent can actually add -- decide
+it. The block says out loud that the two are not the same quantity (one is a
+gameweek, one is a horizon), so it reads as a pointer rather than an arithmetic
+claim.
+
+**The artefact's presence is the switch; there is no `AIRSENAL_ENABLED`.** Same
+reasoning as `open_archive()` keying on notes existing rather than on
+`KNOWLEDGE_SOURCES_FILE`: whether the job should *produce* an artefact and
+whether there is one to *read* are different questions, and a flag that conflates
+them fails silently. A missing snapshot is a sentence in the brief, not an
+absence the agent has to infer.
+

@@ -114,6 +114,44 @@ class Settings(BaseSettings):
         ),
     )
 
+    # -------------------------------------------------------------- airsenal
+    # Expected points from the AIrsenal model, produced by a separate scheduled
+    # container and read off a shared volume. There is deliberately no enable
+    # flag: the reader keys on the file existing, because "should the job run"
+    # and "is there an artefact to read" are different questions and conflating
+    # them fails silently. See docs/airsenal.md.
+    airsenal_snapshot_path: str = Field(
+        default="",
+        description=(
+            "Path to the AIrsenal predictions artefact. Empty means "
+            "${STATE_DIR}/airsenal/predictions.json, which is where the sidecar "
+            "writes it by default."
+        ),
+    )
+    airsenal_max_age_hours: float = Field(
+        default=36.0,
+        gt=0,
+        description=(
+            "Ignore an artefact older than this. Sized to survive one missed "
+            "nightly run but not two -- a model fit from three days ago has "
+            "priced in neither the last gameweek nor this week's injuries."
+        ),
+    )
+    airsenal_disagreement_threshold: float = Field(
+        default=1.5,
+        ge=0,
+        description=(
+            "Call out a squad player in the brief when Solio and AIrsenal "
+            "differ by at least this many points. Agreement is background; "
+            "disagreement is where the agent should spend its thinking."
+        ),
+    )
+    airsenal_brief_limit: int = Field(
+        default=20,
+        ge=1,
+        description="Rows of the AIrsenal table in the brief. The tools reach all of it.",
+    )
+
     # ------------------------------------------------------------- knowledge
     knowledge_sources_file: str = Field(
         default="",
