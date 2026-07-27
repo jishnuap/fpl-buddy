@@ -72,10 +72,10 @@ def login(verbose: bool = False) -> None:
     client = FPLClient(settings)
     if not settings.has_login_credentials:
         _die("Set FPL_EMAIL and FPL_PASSWORD to log in.")
-    # Ignore whatever is cached: the point of this command is to prove that a
-    # session can be minted from credentials alone, which is what every
-    # unattended run depends on.
-    client.auth.clear()
+    # `login_now` ignores the cache and does a full login regardless, so there
+    # is nothing to clear first -- and clearing would be actively harmful:
+    # running this from a network where the login turns out to be blocked would
+    # throw away a cached session that was working perfectly well.
     try:
         session = client.auth.login_now()
     except FPLAuthError as exc:
