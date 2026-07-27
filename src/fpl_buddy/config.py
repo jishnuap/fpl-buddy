@@ -22,8 +22,9 @@ class Settings(BaseSettings):
     fpl_password: SecretStr = Field(default=SecretStr(""))
     fpl_entry_id: int = Field(default=0, description="Your FPL manager/entry id.")
 
-    # Fallback when programmatic login is blocked: paste the cookie header from
-    # DevTools (Network -> any /api/me/ request -> Request Headers -> cookie).
+    # Last resort, for networks where Premier League's bot protection blocks the
+    # password login: paste the cookie header from DevTools (Network -> any
+    # /api/me/ request -> Request Headers -> cookie).
     fpl_cookie_header: SecretStr = Field(default=SecretStr(""))
 
     # ------------------------------------------------------------------- azure
@@ -253,7 +254,10 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------- data
     solio_url: str = "https://fpl.solioanalytics.com/api/data/latest.json"
     fpl_api_base: str = "https://fantasy.premierleague.com/api"
-    fpl_login_url: str = "https://users.premierleague.com/accounts/login/"
+    # Which browser curl_cffi impersonates during the password login. Premier
+    # League's bot protection reads the TLS fingerprint, so this is the knob to
+    # turn when a Chrome version stops being accepted -- not a code change.
+    fpl_login_impersonate: str = "chrome"
     http_timeout_seconds: float = 30.0
     user_agent: str = (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "

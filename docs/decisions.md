@@ -182,6 +182,23 @@ so FPL's OAuth client is public and refresh needs no secret we don't have. The
 issuer and client id are read from the token's own claims, so an FPL-side move to
 a different PingOne environment needs no code change.
 
+**The service logs in for itself, and a rejected request no longer costs the
+cache.** Refresh alone made the whole deployment depend on one single-use token
+surviving indefinitely, and two things kept killing it: a `403` from FPL's edge
+(an IP block, not an auth failure) was treated as an expired session and deleted
+the cookie cache, and once the chain broke nothing could recover without a human
+pasting a new header — every scheduled run failed and notified until they did.
+So `fpl/login.py` drives Premier League's own OAuth flow (PingOne DaVinci,
+authorization code + PKCE, public client) from `FPL_EMAIL` and `FPL_PASSWORD`,
+over a `curl_cffi` session impersonating Chrome, because the bot protection
+fingerprints the TLS handshake rather than the headers. The flow was worked out
+by [AIrsenal](https://github.com/alan-turing-institute/AIrsenal); this is a port
+of it with per-step errors. Refresh stays first in line — one request beats five
+— but it is now an optimisation rather than the only way back. Alongside it,
+`invalidate()` flags the cached session instead of deleting it (the access token
+carries the issuer and client id the refresh needs), and only a `401`, or a
+`403` that actually names the credentials, counts as an auth failure at all.
+
 **`verify_session()` probes `/my-team/`, not `/me/`.** After the OAuth migration
 `/me/` returns `200` for a cookie jar with no usable access token, so a check
 against it reported a healthy session that could not read the squad or submit

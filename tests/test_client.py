@@ -127,53 +127,71 @@ def test_no_credentials_at_all_is_an_error(settings):
         FPLAuthenticator(settings).get_session_cookies()
 
 
-@respx.mock
-def test_login_reads_cookies_from_the_302_without_following_it(settings):
+def _with_credentials(settings, monkeypatch, result):
+    """Credentials set, and the password login stubbed to ``result``.
+
+    ``result`` is either a SessionCookies to return or an exception to raise.
+    The flow itself is covered in test_password_login.py; what matters here is
+    when the authenticator reaches for it.
+    """
+    from fpl_buddy.fpl import login as login_module
+
     settings.fpl_email = "me@example.test"
     settings.fpl_password = _secret("hunter2")
 
-    route = respx.post(LOGIN).mock(
-        return_value=httpx.Response(
-            302,
-            headers=[
-                ("set-cookie", "pl_profile=profile-value; Path=/"),
-                ("set-cookie", "sessionid=session-value; Path=/"),
-                ("location", "https://fantasy.premierleague.com/a/login"),
-            ],
-        )
+    calls: list[int] = []
+
+    def fake_login(_settings, **_kwargs):
+        calls.append(1)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(login_module, "password_login", fake_login)
+    return calls
+
+
+def test_credentials_mint_a_session_when_nothing_is_cached(settings, monkeypatch):
+    minted = SessionCookies(cookies={"access_token": "minted", "refresh_token": "r"})
+    calls = _with_credentials(settings, monkeypatch, minted)
+    auth = FPLAuthenticator(settings)
+
+    session = auth.get_session_cookies()
+
+    assert session.access_token == "minted"
+    assert len(calls) == 1
+    assert auth.cache.load().access_token == "minted", "a login is worth caching"
+
+
+def test_a_password_login_outranks_the_pasted_header(authed_settings, monkeypatch):
+    """The header is a human-maintained fallback; credentials renew themselves."""
+    minted = SessionCookies(cookies={"access_token": "minted", "refresh_token": "r"})
+    _with_credentials(authed_settings, monkeypatch, minted)
+
+    session = FPLAuthenticator(authed_settings).get_session_cookies()
+
+    assert session.access_token == "minted"
+
+
+def test_a_failed_login_still_falls_back_to_the_pasted_header(authed_settings, monkeypatch):
+    """Blocked from this network is exactly when the header earns its keep."""
+    from fpl_buddy.fpl.login import FPLLoginError
+
+    _with_credentials(
+        authed_settings, monkeypatch, FPLLoginError("authorize", "HTTP 403. bot protection")
     )
 
-    session = FPLAuthenticator(settings).get_session_cookies()
-    assert session.cookies["pl_profile"] == "profile-value"
-    assert session.cookies["sessionid"] == "session-value"
-    assert route.call_count == 1, "following the redirect would lose the cookies"
+    session = FPLAuthenticator(authed_settings).get_session_cookies()
 
-    request = route.calls[0].request
-    body = request.content.decode()
-    assert "app=plfpl-web" in body
-    assert "redirect_uri=https%3A%2F%2Ffantasy.premierleague.com%2Fa%2Flogin" in body
+    assert session.cookies["sessionid"] == "abc123"
 
 
-@respx.mock
-def test_login_403_says_it_is_the_bot_protection(settings):
-    settings.fpl_email = "me@example.test"
-    settings.fpl_password = _secret("hunter2")
-    respx.post(LOGIN).mock(return_value=httpx.Response(403, text="denied"))
+def test_a_failed_login_with_no_fallback_reports_the_login_error(settings, monkeypatch):
+    from fpl_buddy.fpl.login import FPLLoginError
 
-    with pytest.raises(FPLAuthError, match="FPL_COOKIE_HEADER"):
-        FPLAuthenticator(settings).get_session_cookies()
+    _with_credentials(settings, monkeypatch, FPLLoginError("sign-on submit", "bad password"))
 
-
-@respx.mock
-def test_login_without_cookies_hints_at_bad_credentials(settings):
-    settings.fpl_email = "me@example.test"
-    settings.fpl_password = _secret("wrong")
-    respx.post(LOGIN).mock(
-        return_value=httpx.Response(
-            302, headers=[("location", "https://fantasy.premierleague.com/?state=fail")]
-        )
-    )
-    with pytest.raises(FPLAuthError, match="bad credentials"):
+    with pytest.raises(FPLAuthError, match="sign-on submit"):
         FPLAuthenticator(settings).get_session_cookies()
 
 
@@ -275,6 +293,40 @@ def test_a_403_without_a_firecrawl_key_still_raises(authed_settings):
     with pytest.raises(FPLApiError) as excinfo:
         FPLClient(authed_settings).bootstrap()
     assert excinfo.value.status_code == 403
+
+
+@respx.mock
+def test_a_blocked_read_leaves_the_cached_credentials_alone(authed_settings):
+    """An edge block is not an expired session, and must not cost us the cache."""
+    auth = FPLAuthenticator(authed_settings)
+    auth.cache.save(SessionCookies(cookies={"access_token": "live", "refresh_token": "keep-me"}))
+    route = respx.get(f"{API}/bootstrap-static/").mock(
+        return_value=httpx.Response(403, text="blocked")
+    )
+
+    with pytest.raises(FPLApiError):
+        FPLClient(authed_settings, authenticator=auth).bootstrap()
+
+    assert route.call_count == 1, "retrying an IP block never helps"
+    cached = auth.cache.load()
+    assert cached.refresh_token == "keep-me"
+    assert cached.access_token == "live"
+
+
+@respx.mock
+def test_a_403_that_names_the_credentials_does_re_authenticate(authed_settings):
+    """FPL's own auth failure, which a fresh session genuinely can fix."""
+    route = respx.get(f"{API}/bootstrap-static/").mock(
+        side_effect=[
+            httpx.Response(403, json={"detail": "Authentication credentials were not provided."}),
+            httpx.Response(200, json=load_json("bootstrap-static.json")),
+        ]
+    )
+
+    boot = FPLClient(authed_settings).bootstrap()
+
+    assert boot.next_gameweek.id == 4
+    assert route.call_count == 2
 
 
 @respx.mock
@@ -620,8 +672,27 @@ def test_a_redirected_read_is_a_failure_too(authed_settings):
 def test_write_retries_once_after_refreshing_a_dead_session(authed_settings):
     authed_settings.dry_run = False
     route = respx.post(f"{API}/transfers/").mock(
-        side_effect=[httpx.Response(403, text="expired"), httpx.Response(200, json={"ok": 1})]
+        side_effect=[
+            httpx.Response(401, json={"detail": "Authentication credentials were not provided."}),
+            httpx.Response(200, json={"ok": 1}),
+        ]
     )
     result = FPLClient(authed_settings).submit_transfers(transfers=[TRANSFER], event=4)
     assert result == {"ok": 1}
     assert route.call_count == 2
+
+
+@respx.mock
+def test_a_blocked_write_is_not_treated_as_a_dead_session(authed_settings):
+    """FPL's edge 403s writes from a datacenter IP whatever the credentials are.
+
+    Retrying with renewed credentials cannot help, and doing so spends a
+    single-use refresh token on a problem that has nothing to do with auth --
+    which is how a deployment talks itself into needing a human.
+    """
+    authed_settings.dry_run = False
+    route = respx.post(f"{API}/transfers/").mock(return_value=httpx.Response(403, text="blocked"))
+
+    with pytest.raises(TransferRejected):
+        FPLClient(authed_settings).submit_transfers(transfers=[TRANSFER], event=4)
+    assert route.call_count == 1, "a bare 403 must not trigger a re-authentication"

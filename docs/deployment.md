@@ -92,7 +92,8 @@ short version of what actually matters:
 | Variable | Notes |
 |---|---|
 | `FPL_ENTRY_ID` | Required. From the URL of your points page. |
-| `FPL_COOKIE_HEADER` | The realistic auth path in the cloud — see below. |
+| `FPL_EMAIL`, `FPL_PASSWORD` | The auth path that needs no human upkeep — see below. |
+| `FPL_COOKIE_HEADER` | Fallback for networks where the login is blocked. |
 | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_API_KEY` | Or `AZURE_OPENAI_AUTH=managed_identity` where the platform can provide one. |
 | `APPROVAL_SECRET` | Signs approval links. `python -c "import secrets;print(secrets.token_urlsafe(32))"`. Rotating it kills every outstanding link. |
 | `PUBLIC_BASE_URL` | Externally reachable base URL, no trailing slash. |
@@ -111,35 +112,39 @@ deployment manifest you commit.
 ## Authentication
 
 FPL uses OAuth. Your session is a short-lived `access_token` plus a long-lived
-`refresh_token`, both issued by PingOne and carried as cookies. Premier League's
-bot protection returns `403` to datacenter IPs, so programmatic login is not
-available anywhere but your own machine — the pasted header is the way in:
+`refresh_token`, both issued by PingOne.
 
-1. Log in at fantasy.premierleague.com in a normal browser.
-2. DevTools → Network → click any `/api/me/` request.
-3. Request Headers → copy the entire `cookie` value.
-4. Set it as `FPL_COOKIE_HEADER`. It must contain `access_token` and
-   `refresh_token`.
-
-The lifetimes are what matter operationally:
-
-| Token | Lives | Consequence |
-|---|---|---|
-| `access_token` | **8 hours** | Shorter than the gap between gameweeks, so it is *always* refreshed at least once per cycle. |
-| `refresh_token` | **~180 days** | You re-paste roughly twice a season, not twice a week. |
-
-Refresh happens automatically before any request that needs it. Two things follow
-that are easy to get wrong:
-
-- **`STATE_DIR` must be durable.** Refreshed tokens are cached there, and the
-  refresh token **rotates on every use** — the copy in your environment is spent
-  the moment the first refresh succeeds. An ephemeral `STATE_DIR` gives you
-  exactly one refresh per paste, and then the deadline job starts failing.
-- **Prove the refresh before trusting a deadline to it:**
+**Set `FPL_EMAIL` and `FPL_PASSWORD`.** The service drives Premier League's own
+login flow — an OAuth authorization-code exchange with PKCE against
+`account.premierleague.com`, over a `curl_cffi` session that presents Chrome's
+TLS fingerprint. The impersonation is the load-bearing part: the bot protection
+reads the handshake, and a stock HTTP client is refused before it gets to send a
+password. Prove it works from wherever you deploy:
 
 ```bash
-docker exec fpl-buddy fpl-buddy token --refresh
+docker exec fpl-buddy fpl-buddy login
 ```
+
+Credentials are what make the deployment unattended. Sessions are obtained in
+this order, so the cheap path is still the common one:
+
+| Order | Path | When |
+|---|---|---|
+| 1 | Cached access token | Still live (they last **8 hours**). |
+| 2 | Refresh | One request. Refresh tokens **rotate on every use**, so the cache holds the only live copy. |
+| 3 | Password login | Refresh unavailable or rejected. Needs no prior state, so this is what turns a lost token into a working session instead of an alert. |
+| 4 | `FPL_COOKIE_HEADER` | Last resort, for a network where the login itself is blocked. |
+
+Two consequences:
+
+- **A durable `STATE_DIR` is worth having, but is no longer critical.** It saves
+  a full login per run. Losing it costs requests, not the deployment.
+- **`FPL_PASSWORD` is a real secret in production.** Both deploy scripts put it
+  in the platform's secret store; do the same in any manifest of your own.
+
+For the fallback header: log in at fantasy.premierleague.com in a browser →
+DevTools → Network → any `/api/me/` request → Request Headers → copy the entire
+`cookie` value. It must contain `access_token` and `refresh_token`.
 
 Check state at any time, without touching the network:
 
