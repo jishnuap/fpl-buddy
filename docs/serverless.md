@@ -71,15 +71,14 @@ it is still comfortably inside both platforms' free grants.
 
 ## Why the volume is not optional
 
-`STATE_DIR` holds four things, and one of them makes an ephemeral filesystem
-fatal rather than inconvenient:
+`STATE_DIR` holds four things, and losing any of them costs something:
 
 | | Consequence of losing it |
 |---|---|
 | `proposals/` | A pending proposal vanishes and never auto-commits |
 | `notes.json` | Notes typed during the day never reach the agent |
 | `knowledge/` | The article archive resets |
-| **`fpl_cookies.json`** | **The FPL refresh token rotates on every use.** The copy in your environment is spent the moment the first refresh succeeds. Ephemeral state gives you exactly one refresh per paste, and then the deadline job starts failing. |
+| `fpl_cookies.json` | The FPL refresh token rotates on every use, so the cache holds the only live copy. With `FPL_EMAIL`/`FPL_PASSWORD` set, losing it costs a full login per run rather than the deployment; without them it is fatal, and the next run needs a human. |
 
 Note that `STATE_BACKEND=azure_table` does **not** get you out of this: the
 cookie cache is on `state_dir` regardless of the backend. Since you need a real

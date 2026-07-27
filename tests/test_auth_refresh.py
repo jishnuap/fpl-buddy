@@ -328,6 +328,47 @@ def test_no_credentials_at_all_names_the_cookie_header_first(auth):
         auth.get_session_cookies()
 
 
+# ------------------------------------------------------------------ invalidate
+
+
+def test_invalidate_flags_the_session_without_discarding_it(auth):
+    """The cache holds the only live copy of a single-use token.
+
+    Deleting it over one rejected request -- often an IP block, not an auth
+    failure -- is what turned a recoverable blip into "re-paste your cookies".
+    The access token stays too: its claims are where the refresh finds the
+    issuer and client id.
+    """
+    auth.cache.save(session(access_in=7200))
+
+    auth.invalidate()
+
+    cached = auth.cache.load()
+    assert cached is not None
+    assert cached.rejected is True and cached.is_stale is True
+    assert cached.refresh_token == "refresh-token-1"
+    assert cached.token_url == TOKEN_URL
+    assert cached.cookies["datadome"] == "datadome-value"
+
+
+@respx.mock
+def test_an_invalidated_session_renews_itself_on_the_next_call(auth):
+    route = respx.post(TOKEN_URL).mock(return_value=httpx.Response(200, json=token_response()))
+    auth.cache.save(session(access_in=7200))
+    auth.invalidate()
+
+    renewed = auth.get_session_cookies()
+
+    assert route.call_count == 1
+    assert renewed.is_expiring() is False
+
+
+def test_clear_is_the_explicit_way_to_forget_everything(auth):
+    auth.cache.save(session())
+    auth.clear()
+    assert auth.cache.load() is None
+
+
 # ------------------------------------------------------------------------ peek
 
 

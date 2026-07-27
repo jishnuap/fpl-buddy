@@ -58,6 +58,7 @@ or re-validation blocked it — both want a human.
 
 ```bash
 fpl-buddy verify              # can it actually read the squad?
+fpl-buddy login               # log in from FPL_EMAIL + FPL_PASSWORD, from scratch
 fpl-buddy token               # token expiry, and whether it can renew itself
 fpl-buddy token --refresh     # force a refresh, to prove the flow works
 fpl-buddy schedule            # when will the jobs run?
@@ -73,18 +74,22 @@ fpl-buddy commit              # run the deadline job by hand
 
 ## When something goes wrong
 
-**`403` on login.** Expected from a datacenter IP, and unavoidable now that FPL
-uses OAuth. Use `FPL_COOKIE_HEADER`; see [deployment.md](deployment.md#authentication).
+**`FPL login failed at <step>`.** The password login is a private flow driven
+step by step, so the message names where it stopped. `authorize` with a `403` is
+the bot protection rejecting the network — set `FPL_COOKIE_HEADER` to get in
+from there. `sign-on submit` usually means FPL rejected the email or password.
+Anything else generally means Premier League changed their login page, and the
+flow in `fpl/login.py` needs re-deriving from a browser capture.
 
 **`403 "Authentication credentials were not provided."` on `/my-team/`.** The
-access token is missing or dead. `fpl-buddy token` shows the state; a valid
-refresh token renews it automatically, and if refresh is rejected the error says
-to re-paste. The header must contain `access_token` **and** `refresh_token` —
-without the latter, the session cannot survive its 8-hour lifetime.
+access token is missing or dead. The client renews and retries once by itself:
+refresh if a refresh token is cached, otherwise a full login. `fpl-buddy token`
+shows what it has to work with.
 
-**It worked, then stopped after one refresh.** `STATE_DIR` isn't durable. Refresh
-tokens rotate on use, so the copy in your environment is spent after the first
-refresh and only the cache holds the live one. Mount a volume.
+**Repeated auth failures after a long quiet spell.** Check that `FPL_EMAIL` and
+`FPL_PASSWORD` actually reached the deployment (`fpl-buddy token` prints whether
+credentials are set). Without them the service can only maintain the session it
+was given, and a spent refresh token is then terminal until someone re-pastes.
 
 **`403` on `bootstrap-static` (or any other read), specifically from a cloud
 deployment.** Not the login block above, and not a dead session — this is FPL's

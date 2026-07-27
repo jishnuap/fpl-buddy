@@ -68,24 +68,26 @@ gateway connection that would keep the container alive anyway.
 ## Authentication
 
 FPL uses OAuth: a short-lived `access_token` (**8 hours**) plus a long-lived
-`refresh_token` (**~180 days**), issued by PingOne and carried as cookies.
+`refresh_token`, issued by PingOne.
 
-Paste the cookie header from your browser — DevTools → Network → any `/api/me/`
-request → Request Headers → the whole `cookie` value — into
-`FPL_COOKIE_HEADER`. Programmatic login is not viable off your own machine;
-Premier League's bot protection returns `403` to datacenter IPs.
-
-Because a gameweek cycle (propose at T-1h, commit at T-45m) can outlive the access
-token, **refresh is load-bearing, not an optimisation.** It happens automatically
-before any request that needs it. Two consequences:
-
-- `STATE_DIR` must be durable. Refresh tokens rotate on use, so the cache holds
-  the only live copy after the first refresh.
-- Prove it once before trusting a deadline to it: `fpl-buddy token --refresh`.
+Set `FPL_EMAIL` and `FPL_PASSWORD`. The service logs in for itself, driving the
+same PingOne flow a browser does — TLS-impersonated with `curl_cffi`, because
+Premier League's bot protection fingerprints the handshake. That is what makes
+it unattended: a session that expires, or a refresh token that is spent or lost,
+is re-minted rather than reported.
 
 ```bash
+.venv/bin/fpl-buddy login       # log in and cache a session
 .venv/bin/fpl-buddy token       # expiry, and whether it can renew itself
 ```
+
+Refresh still runs first when a cached token allows it, since it is a single
+request rather than five. `STATE_DIR` being durable therefore saves work — but
+losing it no longer strands the deployment.
+
+`FPL_COOKIE_HEADER` remains as a fallback for networks where the login itself is
+blocked: DevTools → Network → any `/api/me/` request → Request Headers → the
+whole `cookie` value.
 
 ## What the agent sees
 

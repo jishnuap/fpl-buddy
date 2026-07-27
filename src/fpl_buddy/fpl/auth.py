@@ -15,23 +15,23 @@ The lifetimes are what drive the design here:
 * the **refresh token lasts ~180 days** and carries ``offline_access``, so it can
   mint new access tokens without a browser.
 
-Three ways to get a session, tried in order:
+Four ways to get a session, tried in order:
 
-1. **Cached tokens** on disk, refreshed automatically when the access token is
-   near expiry.
-2. **Pasted cookie header** (``FPL_COOKIE_HEADER``) from DevTools -> Network ->
-   any ``/api/me/`` request -> the ``cookie`` request header. This is the normal
-   way in, and the only way from a datacenter IP, where Premier League's bot
-   protection rejects programmatic login outright.
-3. **Legacy login** against ``users.premierleague.com/accounts/login/``, kept for
-   the pre-OAuth cookie scheme. Redirects must not be followed: the ``302``
-   carries the ``Set-Cookie`` headers, and following the hop loses them.
+1. **Cached tokens** on disk, used as-is while the access token is still live.
+2. **Refresh** of the cached refresh token. Cheap, and the common path.
+3. **Password login** (``FPL_EMAIL`` + ``FPL_PASSWORD``) through the PingOne
+   DaVinci flow in :mod:`.login`. This is the recovery path that matters: it
+   needs no prior state, so a spent or lost refresh token heals itself instead
+   of paging a human.
+4. **Pasted cookie header** (``FPL_COOKIE_HEADER``) from DevTools -> Network ->
+   any ``/api/me/`` request -> the ``cookie`` request header. Last resort, for
+   networks where Premier League's bot protection blocks login outright.
 
 .. warning::
    PingOne **rotates the refresh token** on every use, so the cache on disk
-   becomes the only valid copy the moment a refresh happens. If ``STATE_DIR`` is
-   not durable you get exactly one refresh per paste, and then the deadline job
-   starts failing. Mount a volume.
+   becomes the only valid copy the moment a refresh happens. A durable
+   ``STATE_DIR`` is therefore still worth having -- it saves a full login per
+   run -- but losing it is no longer fatal, as long as credentials are set.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ import binascii
 import json
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -95,6 +95,11 @@ def decode_jwt_claims(token: str) -> dict[str, Any]:
 class SessionCookies:
     cookies: dict[str, str] = field(default_factory=dict)
     obtained_at: float = field(default_factory=time.time)
+    # Set when FPL rejected these credentials before their own expiry says they
+    # should be gone. The tokens are kept regardless: the access token is where
+    # the issuer and client id come from, so throwing it away would leave the
+    # refresh with nowhere to post.
+    rejected: bool = False
 
     # ------------------------------------------------------------------ tokens
     @property
@@ -157,6 +162,8 @@ class SessionCookies:
         only a fallback for the legacy scheme, where nothing tells us the
         lifetime -- guessing 12 hours there beats trusting a blob forever.
         """
+        if self.rejected:
+            return True
         if self.expires_at is not None:
             return self.is_expiring()
         return (time.time() - self.obtained_at) > COOKIE_MAX_AGE_SECONDS
@@ -198,11 +205,19 @@ class SessionCookies:
         )
 
     def to_dict(self) -> dict:
-        return {"cookies": self.cookies, "obtained_at": self.obtained_at}
+        return {
+            "cookies": self.cookies,
+            "obtained_at": self.obtained_at,
+            "rejected": self.rejected,
+        }
 
     @classmethod
     def from_dict(cls, data: dict) -> SessionCookies:
-        return cls(cookies=data.get("cookies", {}), obtained_at=data.get("obtained_at", 0.0))
+        return cls(
+            cookies=data.get("cookies", {}),
+            obtained_at=data.get("obtained_at", 0.0),
+            rejected=bool(data.get("rejected", False)),
+        )
 
 
 def parse_cookie_header(header: str) -> dict[str, str]:
@@ -269,13 +284,24 @@ class FPLAuthenticator:
             try:
                 return self._refresh(cached)
             except FPLTokenRefreshError as exc:
-                # Not fatal yet: the env var may hold a newer session than the
-                # cache. Keep the error, though -- if nothing else works it is
-                # the honest explanation, and it says how to recover.
+                # Not fatal: a password login can mint a whole new session, and
+                # failing that the env var may hold something newer than the
+                # cache. Keep the error -- if nothing else works it is the honest
+                # explanation, and it says how to recover.
                 refresh_error = exc
                 logger.warning("Refresh with the cached token failed (%s).", exc)
 
-        # Explicit cookie header next -- the operator saying "use these".
+        # A password login needs no prior state, so it is what turns a dead
+        # refresh token into a working session instead of an alert.
+        login_error: FPLAuthError | None = None
+        if self.settings.has_login_credentials:
+            try:
+                return self._password_login()
+            except FPLAuthError as exc:
+                login_error = exc
+                logger.warning("Password login failed (%s).", exc)
+
+        # Explicit cookie header last -- the operator saying "use these".
         if self.settings.has_cookie_header:
             raw = self.settings.fpl_cookie_header.get_secret_value()
             session = SessionCookies(cookies=parse_cookie_header(raw))
@@ -291,22 +317,37 @@ class FPLAuthenticator:
             self.cache.save(session)
             return session
 
-        if not self.settings.has_login_credentials:
-            # Report the real cause. "No credentials" would send someone to check
-            # their environment when the actual problem is a spent refresh token.
-            if refresh_error is not None:
-                raise refresh_error
-            raise FPLAuthError(
-                "No FPL credentials. Paste FPL_COOKIE_HEADER from your browser "
-                "(DevTools -> Network -> any /api/me/ request -> cookie), or set "
-                "FPL_EMAIL + FPL_PASSWORD for the legacy login."
-            )
-
-        session = self._login()
-        self.cache.save(session)
-        return session
+        # Report the real cause. "No credentials" would send someone to check
+        # their environment when the actual problem is a rejected password or a
+        # spent refresh token.
+        if login_error is not None:
+            raise login_error
+        if refresh_error is not None:
+            raise refresh_error
+        raise FPLAuthError(
+            "No FPL credentials. Set FPL_EMAIL + FPL_PASSWORD, or paste "
+            "FPL_COOKIE_HEADER from your browser (DevTools -> Network -> any "
+            "/api/me/ request -> cookie)."
+        )
 
     def invalidate(self) -> None:
+        """Mark the cached session as rejected, without throwing anything away.
+
+        Deliberately *not* a delete. The refresh token is single-use and the
+        cache holds the only live copy, so deleting the file over one rejected
+        request costs the session itself -- and the request that triggers this
+        is often FPL's edge blocking the IP, which no credential change would
+        have fixed. Flagging it is enough to send the next call down the refresh
+        (or login) path, and it keeps the access token, which is where the
+        issuer and client id for that refresh come from.
+        """
+        cached = self.cache.load()
+        if cached is None:
+            return
+        self.cache.save(replace(cached, rejected=True))
+
+    def clear(self) -> None:
+        """Forget the cached session entirely. Only the CLI asks for this."""
         self.cache.clear()
 
     # ----------------------------------------------------------------- refresh
@@ -374,6 +415,23 @@ class FPLAuthenticator:
         logger.info("Refreshed the FPL access token (%s).", refreshed.describe())
         return refreshed
 
+    # ------------------------------------------------------------------- login
+    def _password_login(self) -> SessionCookies:
+        """Mint a session from FPL_EMAIL + FPL_PASSWORD, and cache it.
+
+        Imported here rather than at module scope because :mod:`.login` needs
+        :class:`SessionCookies` from this module.
+        """
+        from .login import password_login
+
+        session = password_login(self.settings)
+        self.cache.save(session)
+        return session
+
+    def login_now(self) -> SessionCookies:
+        """Force a fresh password login. Used by the CLI."""
+        return self._password_login()
+
     def refresh_now(self) -> SessionCookies:
         """Force a refresh. Used by the CLI to prove the flow works."""
         session = self.cache.load()
@@ -397,57 +455,3 @@ class FPLAuthenticator:
                 cookies=parse_cookie_header(self.settings.fpl_cookie_header.get_secret_value())
             )
         return None
-
-    # ----------------------------------------------------------------- private
-    def _login(self) -> SessionCookies:
-        payload = {
-            "login": self.settings.fpl_email,
-            "password": self.settings.fpl_password.get_secret_value(),
-            "app": "plfpl-web",
-            "redirect_uri": "https://fantasy.premierleague.com/a/login",
-        }
-        headers = {
-            "User-Agent": self.settings.user_agent,
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Origin": "https://fantasy.premierleague.com",
-            "Referer": "https://fantasy.premierleague.com/",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-GB,en;q=0.9",
-        }
-
-        # follow_redirects=False is the whole trick. Do not change it.
-        with httpx.Client(
-            follow_redirects=False,
-            timeout=self.settings.http_timeout_seconds,
-        ) as client:
-            try:
-                response = client.post(
-                    self.settings.fpl_login_url, data=payload, headers=headers
-                )
-            except httpx.HTTPError as exc:
-                raise FPLAuthError(f"Login request failed: {exc}") from exc
-
-            cookies = {name: value for name, value in client.cookies.items()}
-
-        # A successful login is a 302 towards the redirect_uri. A 200 usually
-        # means the login form was re-rendered with an error, and a 403 means
-        # the bot protection ate the request.
-        if response.status_code == 403:
-            raise FPLAuthError(
-                "Login returned 403 -- Premier League's bot protection rejected this IP. "
-                "This is common from cloud/datacenter IPs. Use FPL_COOKIE_HEADER instead."
-            )
-
-        missing = [name for name in REQUIRED_COOKIES if name not in cookies]
-        if missing:
-            location = response.headers.get("location", "")
-            hint = ""
-            if "state=fail" in location or "error" in location.lower():
-                hint = " The redirect suggests bad credentials."
-            raise FPLAuthError(
-                f"Login did not yield {', '.join(missing)} (HTTP {response.status_code}).{hint} "
-                "If credentials are correct, fall back to FPL_COOKIE_HEADER."
-            )
-
-        logger.info("Logged in to FPL, obtained %d cookies.", len(cookies))
-        return SessionCookies(cookies=cookies)

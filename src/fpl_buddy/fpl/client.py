@@ -42,6 +42,24 @@ except ImportError:  # pragma: no cover - optional dependency
 logger = logging.getLogger(__name__)
 
 
+def _is_auth_failure(response: httpx.Response) -> bool:
+    """Whether this response means "your credentials are no good".
+
+    The distinction is load-bearing. FPL answers an unauthenticated request with
+    ``403 {"detail": "Authentication credentials were not provided."}``, but its
+    edge *also* answers a perfectly authenticated request from a datacenter IP
+    with a bare ``403``. Treating both as an expired session burns a single-use
+    refresh token on every blocked request, which is how a working deployment
+    talks itself into needing a human. A 401 is always ours; a 403 only counts
+    when FPL says the credentials are the problem.
+    """
+    if response.status_code == 401:
+        return True
+    if response.status_code != 403:
+        return False
+    return "credentials" in response.text[:500].lower()
+
+
 class FPLApiError(RuntimeError):
     def __init__(self, message: str, *, status_code: int | None = None, body: str = "") -> None:
         super().__init__(message)
@@ -93,6 +111,10 @@ class FPLClient:
         )
         if session.access_token:
             headers["Authorization"] = f"Bearer {session.access_token}"
+            # FPL's own web client sends the token under this name. Both are
+            # accepted today; sending both costs a header and survives them
+            # tightening up on either one.
+            headers["X-API-Authorization"] = f"Bearer {session.access_token}"
         return headers
 
     @retry(
@@ -110,16 +132,16 @@ class FPLClient:
         with httpx.Client(timeout=self.settings.http_timeout_seconds) as client:
             response = client.get(url, headers=headers)
 
-        if response.status_code in (401, 403) and authorised:
-            # Session probably expired -- drop the cache and try once more.
-            logger.info("Authorised GET returned %s; refreshing session.", response.status_code)
+        if authorised and _is_auth_failure(response):
+            # The credentials themselves were rejected -- renew and try once more.
+            logger.info("Authorised GET returned %s; renewing session.", response.status_code)
             self.auth.invalidate()
             self._session = self.auth.get_session_cookies(force_refresh=True)
             headers = self._auth_headers(referer="https://fantasy.premierleague.com/my-team")
             with httpx.Client(timeout=self.settings.http_timeout_seconds) as client:
                 response = client.get(url, headers=headers)
 
-        # A 403 here is not an expired session (that was just handled above) --
+        # A bare 403 is not an expired session (that was just handled above) --
         # every FPL Cloud Run deployment we've tested gets this from a plain,
         # freshly-authenticated request too. It is FPL's edge blocking the IP
         # itself, so retrying with different headers never helps; only fetching
@@ -193,7 +215,7 @@ class FPLClient:
         ) as client:
             response = client.post(url, json=payload, headers=self._auth_headers(referer=referer))
 
-        if response.status_code in (401, 403):
+        if _is_auth_failure(response):
             self.auth.invalidate()
             self._session = self.auth.get_session_cookies(force_refresh=True)
             with httpx.Client(

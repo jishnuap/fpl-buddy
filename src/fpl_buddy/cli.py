@@ -67,16 +67,23 @@ def _banner(settings: Settings) -> None:
 
 @app.command()
 def login(verbose: bool = False) -> None:
-    """Obtain and cache an FPL session, then prove it works."""
+    """Log in with FPL_EMAIL + FPL_PASSWORD, cache the session, prove it works."""
     settings = _setup(verbose)
     client = FPLClient(settings)
+    if not settings.has_login_credentials:
+        _die("Set FPL_EMAIL and FPL_PASSWORD to log in.")
+    # Ignore whatever is cached: the point of this command is to prove that a
+    # session can be minted from credentials alone, which is what every
+    # unattended run depends on.
+    client.auth.clear()
     try:
-        client.auth.get_session_cookies(force_refresh=True)
+        session = client.auth.login_now()
     except FPLAuthError as exc:
         _die(
             f"{exc}\n\nIf login is blocked from this network, paste FPL_COOKIE_HEADER "
             "from DevTools (Network -> any /api/me/ request -> Request Headers -> cookie)."
         )
+    console.print(session.describe())
     if not client.verify_session():
         _die("Got credentials, but /my-team/ still rejects them. Check FPL_ENTRY_ID.")
     console.print("[bold green]✓[/] Session is live and cached.")
@@ -98,20 +105,34 @@ def token(
 
     current = auth.peek()
     if current is None:
+        if settings.has_login_credentials:
+            console.print(
+                "No cached session, but FPL_EMAIL and FPL_PASSWORD are set -- "
+                "run `fpl-buddy login` to mint one."
+            )
+            return
         _die(
-            "No credentials at all. Paste FPL_COOKIE_HEADER from DevTools "
-            "(Network -> any /api/me/ request -> Request Headers -> cookie)."
+            "No credentials at all. Set FPL_EMAIL + FPL_PASSWORD, or paste "
+            "FPL_COOKIE_HEADER from DevTools (Network -> any /api/me/ request -> "
+            "Request Headers -> cookie)."
         )
 
     console.print(f"[bold]Now:[/]   {current.describe()}")
     console.print(f"Cache:  {auth.cache.path}")
+    console.print(
+        "Login:  "
+        + (
+            "FPL_EMAIL + FPL_PASSWORD set, so a dead session renews itself"
+            if settings.has_login_credentials
+            else "[yellow]no credentials[/] -- a dead session needs a human re-paste"
+        )
+    )
     if current.is_oauth:
         console.print(f"Issuer: {current.token_issuer}")
-        if not current.can_refresh:
+        if not current.can_refresh and not settings.has_login_credentials:
             console.print(
-                "[yellow]![/] No refresh token, so this session dies in hours and "
-                "cannot renew itself. Re-paste a cookie header that includes "
-                "refresh_token."
+                "[yellow]![/] No refresh token and no credentials, so this session "
+                "dies in hours and cannot renew itself."
             )
 
     if not refresh:

@@ -10,6 +10,9 @@ dependencies = [
     "langchain-openai>=1.0.0",
     "langgraph>=1.0.0",
     "httpx>=0.27",
+    # Chrome TLS impersonation for the FPL password login. Premier League's bot
+    # protection fingerprints the handshake, so a stock client cannot log in.
+    "curl_cffi>=0.7",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
     "fastapi>=0.115",
