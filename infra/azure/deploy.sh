@@ -317,12 +317,12 @@ cat <<DONE
 $(printf '\033[1mDeployed.\033[0m')
 
   Approval pages   https://$FQDN
-  Health           https://$FQDN/healthz
+  Health           https://$FQDN/health
   Tick schedule    $TICK_CRON (UTC)
 
 Check it before trusting a deadline to it:
 
-  curl -s https://$FQDN/healthz          # expect "scheduler": "external"
+  curl -s https://$FQDN/health           # expect "scheduler": "external"
   az containerapp job start --name $JOB_NAME --resource-group $RESOURCE_GROUP
   az containerapp job execution list --name $JOB_NAME --resource-group $RESOURCE_GROUP -o table
 

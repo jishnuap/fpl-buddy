@@ -62,7 +62,7 @@ docker run -d --name fpl-buddy \
 Then check it:
 
 ```bash
-curl localhost:8080/healthz
+curl localhost:8080/health
 docker logs -f fpl-buddy
 ```
 

@@ -87,6 +87,15 @@ def create_app(
     app.state.orchestrator = orchestrator
 
     # ------------------------------------------------------------------ health
+    #
+    # ``/health`` is the path to point probes and docs at. ``/healthz`` is kept
+    # as an alias because it is the older name and local runs still use it, but
+    # it is unreachable on Cloud Run: Google's frontend answers ``/healthz`` on
+    # ``*.run.app`` itself with its own HTML 404 (no ``server: Google Frontend``
+    # header, and no request log entry) before the container is ever consulted.
+    # Neighbouring paths like ``/healthz2`` reach the app fine, so this is that
+    # one literal path being reserved upstream, not anything about the app.
+    @app.get("/health")
     @app.get("/healthz")
     def healthz(conf: Conf) -> dict:
         return {

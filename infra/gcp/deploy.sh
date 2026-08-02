@@ -318,12 +318,12 @@ cat <<DONE
 $(printf '\033[1mDeployed.\033[0m')
 
   Approval pages   $URL
-  Health           $URL/healthz
+  Health           $URL/health
   Tick schedule    $TICK_CRON ($TICK_TIMEZONE)
 
 Check it before trusting a deadline to it:
 
-  curl -s $URL/healthz                   # expect "scheduler": "external"
+  curl -s $URL/health                    # expect "scheduler": "external"
   gcloud run jobs execute $JOB_NAME --region $REGION --project $PROJECT --wait
   gcloud run jobs executions list --job $JOB_NAME --region $REGION --project $PROJECT
 
