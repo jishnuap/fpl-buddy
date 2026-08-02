@@ -106,8 +106,18 @@ short version of what actually matters:
 | `KNOWLEDGE_HARVEST_HOUR`, `KNOWLEDGE_INDEX_DAYS`, `KNOWLEDGE_INDEX_LIMIT` | When the daily harvest runs, and how much of the archive reaches the brief. |
 | `DRY_RUN` | Leave `true` until you have worked through [verify-payloads.md](verify-payloads.md). |
 
-Pass secrets as your platform's secret references, not as plaintext in a
-deployment manifest you commit.
+Never put secrets in a deployment manifest you commit. Where they go instead is
+a choice with a price attached, and the two scripts here answer it differently:
+
+- **Azure** (`infra/azure/deploy.sh`) uses Container Apps secrets, which are
+  free.
+- **GCP** (`infra/gcp/deploy.sh`) sets them as plain environment variables.
+  Secret Manager bills **$0.06 per enabled version per month**, and the script
+  added a version on every deploy — a bill that grew with the deploy count
+  rather than with the deployment. The trade is that anyone with `run.viewer`
+  on the project can read every value in the console. Fine for a personal
+  project with one owner; change it back for anything shared, by restoring the
+  `--set-secrets` wiring in git history.
 
 ## Authentication
 
@@ -139,8 +149,8 @@ Two consequences:
 
 - **A durable `STATE_DIR` is worth having, but is no longer critical.** It saves
   a full login per run. Losing it costs requests, not the deployment.
-- **`FPL_PASSWORD` is a real secret in production.** Both deploy scripts put it
-  in the platform's secret store; do the same in any manifest of your own.
+- **`FPL_PASSWORD` is a real secret in production.** Where each script puts it,
+  and why, is in [Environment](#environment) above. Never commit it.
 
 For the fallback header: log in at fantasy.premierleague.com in a browser →
 DevTools → Network → any `/api/me/` request → Request Headers → copy the entire

@@ -53,13 +53,23 @@ BUCKET="${BUCKET:-fpl-buddy-state-$(printf '%s' "$PROJECT" | cksum | cut -d' ' -
 
 SA_EMAIL="$SERVICE_ACCOUNT@$PROJECT.iam.gserviceaccount.com"
 
-# Read from ENV_FILE. SECRET_KEYS go into Secret Manager and are mounted by
-# reference; PLAIN_KEYS are set as ordinary environment variables and are
-# visible to anyone with console access to the project.
+# Read from ENV_FILE and set as ordinary environment variables on both the job
+# and the service.
+#
+# This used to route the credentials through Secret Manager. It no longer does,
+# and that is a deliberate trade: a new secret version was created on every
+# deploy and every enabled version is billed monthly, so the bill grew with the
+# deploy count rather than with the deployment. Env vars cost nothing.
+#
+# The price is that every value here -- the Discord bot token, the Azure OpenAI
+# key, the approval secret, the FPL password -- is readable in plain text by
+# anyone holding `run.viewer` on this project, in the console and in
+# `gcloud run services describe`. That is an acceptable trade for a personal
+# project owned by one person. It is not one to copy into a shared project.
 #
 # PUBLIC_BASE_URL is deliberately absent: it has to be the service's own URL,
 # which this script discovers and sets for you.
-PLAIN_KEYS=(
+ENV_KEYS=(
   FPL_ENTRY_ID TIMEZONE LOG_LEVEL DRY_RUN AUTO_COMMIT_ENABLED
   PROPOSE_HOURS_BEFORE_DEADLINE COMMIT_MINUTES_BEFORE_DEADLINE
   MAX_POINTS_HIT MIN_CAPTAIN_CONFIDENCE FIXTURE_HORIZON_GAMEWEEKS
@@ -70,8 +80,6 @@ PLAIN_KEYS=(
   KNOWLEDGE_HARVEST_HOUR KNOWLEDGE_INDEX_DAYS KNOWLEDGE_INDEX_LIMIT
   KNOWLEDGE_FETCH_BACKENDS FIRECRAWL_CREDIT_RESERVE
   TICK_ANCHOR_INTERVAL_HOURS FPL_LOGIN_IMPERSONATE
-)
-SECRET_KEYS=(
   FPL_EMAIL FPL_PASSWORD FPL_COOKIE_HEADER
   AZURE_OPENAI_API_KEY APPROVAL_SECRET API_KEY
   DISCORD_BOT_TOKEN WEBHOOK_URL SMTP_PASSWORD FIRECRAWL_API_KEY FFS_COOKIE
@@ -87,7 +95,7 @@ say() { printf '\n\033[1m==> %s\033[0m\n' "$*"; }
 
 known_key() {
   local candidate
-  for candidate in "${PLAIN_KEYS[@]}" "${SECRET_KEYS[@]}"; do
+  for candidate in "${ENV_KEYS[@]}"; do
     [[ "$candidate" == "$1" ]] && return 0
   done
   return 1
@@ -119,15 +127,12 @@ load_env_file() {
   done < "$ENV_FILE"
 }
 
-secret_id() { printf 'fpl-buddy-%s' "$(printf '%s' "$1" | tr '[:upper:]_' '[:lower:]-')"; }
-
 load_env_file
 
 # ------------------------------------------------------------------- project
 say "Enabling the APIs this needs"
 gcloud services enable \
-  run.googleapis.com cloudscheduler.googleapis.com \
-  secretmanager.googleapis.com storage.googleapis.com \
+  run.googleapis.com cloudscheduler.googleapis.com storage.googleapis.com \
   --project "$PROJECT" --quiet
 
 say "Service account $SA_EMAIL"
@@ -152,39 +157,64 @@ if [[ -f "$SOURCES_FILE" ]]; then
     --project "$PROJECT" --quiet
 fi
 
-# ------------------------------------------------------------------ secrets
-say "Secrets"
-SECRET_ARGS=()
-for key in "${SECRET_KEYS[@]}"; do
-  value="$(value_of "$key")"
-  [[ -n "$value" ]] || continue
-  id="$(secret_id "$key")"
-  gcloud secrets create "$id" --replication-policy automatic \
-    --project "$PROJECT" --quiet 2>/dev/null || true
-  # A new version every deploy. Old ones stay readable, so a bad value is one
-  # `gcloud secrets versions` command away from being rolled back.
-  printf '%s' "$value" | gcloud secrets versions add "$id" \
-    --data-file=- --project "$PROJECT" --quiet --format=none
-  gcloud secrets add-iam-policy-binding "$id" \
-    --member "serviceAccount:$SA_EMAIL" \
-    --role roles/secretmanager.secretAccessor \
-    --project "$PROJECT" --quiet --format=none
-  SECRET_ARGS+=("--set-secrets=$key=$id:latest")
-done
+# -------------------------------------------------------------- environment
+#
+# Written to a YAML file rather than passed on the command line. `--set-env-vars`
+# needs one delimiter that appears in no value, and there isn't one: a cookie
+# header contains pipes, KNOWLEDGE_FETCH_BACKENDS contains commas, an email
+# contains @. A file sidesteps the question, and keeps the values out of the
+# process list while the deploy runs.
+say "Environment"
+ENV_FILE_YAML="$(mktemp -t fpl-buddy-env)"
+# The values are credentials now that Secret Manager is out of the picture.
+chmod 600 "$ENV_FILE_YAML"
+trap 'rm -f "$ENV_FILE_YAML"' EXIT
 
-# gcloud puts --set-env-vars and --update-env-vars in a mutually exclusive
-# group, so everything has to arrive as one flag. The ^|^ prefix switches the
-# separator from a comma to a pipe, which is what lets a value like
-# KNOWLEDGE_FETCH_BACKENDS=firecrawl,scrapling,httpx through intact. (A value
-# containing a literal pipe would still break; none of ours does.)
-ENV_PAIRS="STATE_DIR=/data|STATE_BACKEND=file"
-for key in "${PLAIN_KEYS[@]}"; do
-  value="$(value_of "$key")"
-  [[ -n "$value" ]] || continue
-  ENV_PAIRS="$ENV_PAIRS|$key=$value"
-done
-[[ -f "$SOURCES_FILE" ]] && \
-  ENV_PAIRS="$ENV_PAIRS|KNOWLEDGE_SOURCES_FILE=/data/sources.yaml"
+# YAML single-quoted scalars take anything but a newline; the one escape is a
+# doubled quote. None of ours contains a newline.
+yaml_pair() { printf "%s: '%s'\n" "$1" "${2//\'/\'\'}"; }
+
+{
+  yaml_pair STATE_DIR /data
+  yaml_pair STATE_BACKEND file
+  for key in "${ENV_KEYS[@]}"; do
+    value="$(value_of "$key")"
+    [[ -n "$value" ]] || continue
+    yaml_pair "$key" "$value"
+  done
+  [[ -f "$SOURCES_FILE" ]] && yaml_pair KNOWLEDGE_SOURCES_FILE /data/sources.yaml
+} > "$ENV_FILE_YAML"
+
+# gcloud refuses to replace a secret-backed variable with a literal in the same
+# call -- "already been set with a different type" -- so anything left over from
+# when this script used Secret Manager has to be cleared first. Both are no-ops
+# on a fresh project and on every deploy after the first.
+#
+# Clearing is conditional on there actually being a secret reference to clear.
+# An unconditional clear costs a revision on every deploy, and for the service
+# that revision has no credentials in it -- which the app's own startup guard
+# rejects ("NOTIFY_CHANNEL=discord needs both DISCORD_BOT_TOKEN and
+# DISCORD_CHANNEL_ID"), so the deploy fails before it can set them.
+has_secret_refs() {
+  local kind="$1" name="$2"
+  gcloud run "$kind" describe "$name" --region "$REGION" --project "$PROJECT" \
+    --format='value(spec.template.spec.containers[0].env)' 2>/dev/null \
+    | grep -q "secretKeyRef"
+}
+
+if has_secret_refs jobs "$JOB_NAME"; then
+  say "Clearing the old Secret Manager references on $JOB_NAME"
+  gcloud run jobs update "$JOB_NAME" --region "$REGION" --project "$PROJECT" \
+    --clear-secrets --quiet --format=none
+fi
+if has_secret_refs services "$SERVICE_NAME"; then
+  say "Clearing the old Secret Manager references on $SERVICE_NAME"
+  # --no-traffic: this revision is credential-less by construction, so it must
+  # not be allowed to serve. The next command in this script gives it the
+  # values as literals and takes traffic back.
+  gcloud run services update "$SERVICE_NAME" --region "$REGION" --project "$PROJECT" \
+    --clear-secrets --no-traffic --quiet --format=none || true
+fi
 
 # GCS volume mounts need the second-generation execution environment.
 VOLUME_ARGS=(
@@ -204,8 +234,9 @@ gcloud run jobs deploy "$JOB_NAME" \
   --max-retries 0 \
   --task-timeout 1800s \
   --tasks 1 \
-  "${VOLUME_ARGS[@]}" "${SECRET_ARGS[@]}" \
-  --set-env-vars "^|^$ENV_PAIRS" \
+  "${VOLUME_ARGS[@]}" \
+  --env-vars-file "$ENV_FILE_YAML" \
+  --clear-secrets \
   --quiet
 
 say "Schedule $SCHEDULER_NAME ('$TICK_CRON' $TICK_TIMEZONE)"
@@ -232,12 +263,23 @@ fi
 # PUBLIC_BASE_URL has to be the service's own URL, which does not exist until
 # the service does -- so it is deployed once, asked its address, and updated.
 say "Service $SERVICE_NAME (scales to zero)"
+SERVICE_ENV_YAML="$(mktemp -t fpl-buddy-service-env)"
+chmod 600 "$SERVICE_ENV_YAML"
+trap 'rm -f "$ENV_FILE_YAML" "$SERVICE_ENV_YAML"' EXIT
+
 deploy_service() {
   # SCHEDULER_ENABLED=false because the scheduler and the Discord gateway are
   # the two things that would keep this instance alive; the job owns the
   # schedule now. EXECUTE_ON_APPROVAL=false because approval then records
   # intent and the tick job submits it at T-45m against fresher data -- which
   # keeps every FPL write in one process, and the refresh token rotates on use.
+  {
+    cat "$ENV_FILE_YAML"
+    yaml_pair PUBLIC_BASE_URL "$1"
+    yaml_pair SCHEDULER_ENABLED false
+    yaml_pair EXECUTE_ON_APPROVAL false
+  } > "$SERVICE_ENV_YAML"
+
   gcloud run deploy "$SERVICE_NAME" \
     --image "$IMAGE" \
     --region "$REGION" --project "$PROJECT" \
@@ -246,8 +288,9 @@ deploy_service() {
     --cpu 1 --memory 1Gi \
     --min-instances 0 --max-instances 1 \
     --allow-unauthenticated \
-    "${VOLUME_ARGS[@]}" "${SECRET_ARGS[@]}" \
-    --set-env-vars "^|^$ENV_PAIRS|PUBLIC_BASE_URL=$1|SCHEDULER_ENABLED=false|EXECUTE_ON_APPROVAL=false" \
+    "${VOLUME_ARGS[@]}" \
+    --env-vars-file "$SERVICE_ENV_YAML" \
+    --clear-secrets \
     --quiet
 }
 

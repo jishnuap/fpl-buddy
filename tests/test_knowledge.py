@@ -587,11 +587,18 @@ def test_recent_respects_a_day_window(store):
 
 
 def test_notes_are_returned_newest_first(store):
-    for day in (10, 25, 18):
+    # Ages relative to now, not fixed dates: `recent()` drops notes past their
+    # TTL, so a calendar date that was inside the window when this was written
+    # falls out of it a fortnight later and fails a test about *ordering*.
+    for age in (5, 1, 3):
         store.save(
-            note(id=f"d{day}", url=f"{HOST}/{day}", published=datetime(2026, 7, day, tzinfo=UTC))
+            note(
+                id=f"d{age}",
+                url=f"{HOST}/{age}",
+                published=datetime.now(UTC) - timedelta(days=age),
+            )
         )
-    assert [n.id for n in store.recent()] == ["d25", "d18", "d10"]
+    assert [n.id for n in store.recent()] == ["d1", "d3", "d5"]
 
 
 def test_lookup_by_player(store):
