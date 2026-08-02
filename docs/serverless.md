@@ -153,8 +153,13 @@ A deployment that scaled to zero with the scheduler still switched on looks
 perfectly healthy and quietly never commits, so check the mode explicitly:
 
 ```bash
-curl -s https://your-url/healthz     # expect "scheduler": "external"
+curl -s https://your-url/health     # expect "scheduler": "external"
 ```
+
+Use `/health`, not the `/healthz` alias, on a `*.run.app` URL. Google's frontend
+answers `/healthz` there itself with its own HTML 404 — the request never
+reaches the container and never appears in the request log, so it looks like a
+broken deployment when nothing is wrong. Neighbouring paths are unaffected.
 
 Then run one tick by hand. "nothing due" is the correct answer when no deadline
 is close, and it proves the path end to end:

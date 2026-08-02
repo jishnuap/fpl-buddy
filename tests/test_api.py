@@ -54,12 +54,18 @@ def token_for(settings, proposal_id: str) -> str:
 # ---------------------------------------------------------------------- health
 
 
-def test_healthz_reports_the_safety_switches(client, settings):
-    body = client.get("/healthz").json()
+def test_health_reports_the_safety_switches(client, settings):
+    body = client.get("/health").json()
     assert body["status"] == "ok"
     assert body["dry_run"] is True
     assert body["auto_commit"] is settings.auto_commit_enabled
     assert body["entry_id"] == settings.fpl_entry_id
+
+
+def test_healthz_stays_as_an_alias(client):
+    """Deployments and the Docker healthcheck moved to /health because Google's
+    frontend swallows /healthz on *.run.app, but the old path still answers."""
+    assert client.get("/healthz").json() == client.get("/health").json()
 
 
 # ----------------------------------------------------------------------- reads
@@ -97,7 +103,7 @@ def test_api_key_gates_reads_when_set(settings, orch, proposal):
     assert guarded.get("/proposals/latest").status_code == 401
     assert guarded.get("/proposals/latest", headers={"X-API-Key": "wrong"}).status_code == 401
     assert guarded.get("/proposals/latest", headers={"X-API-Key": "let-me-in"}).status_code == 200
-    assert guarded.get("/healthz").status_code == 200, "health stays open for probes"
+    assert guarded.get("/health").status_code == 200, "health stays open for probes"
 
 
 # -------------------------------------------------------------- the review page

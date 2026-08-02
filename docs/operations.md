@@ -119,7 +119,7 @@ armband didn't — set the captain in the app. Do not re-run `commit`: it would 
 the transfers again.
 
 **Nothing happened at the deadline.** Check, in order: which scheduler was
-supposed to fire (`curl .../healthz` — `in-process` means the container has to
+supposed to fire (`curl .../health` — `in-process` means the container has to
 have been running, and a crash loop or an unintended scale-to-zero kills it;
 `external` means the cron job has to have fired, so check its execution
 history); did a proposal exist for that gameweek (`fpl-buddy list`); was it

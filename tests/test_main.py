@@ -99,11 +99,11 @@ def test_no_gateway_bot_when_the_scheduler_is_off(settings, monkeypatch):
     assert isinstance(app.state.orchestrator.notifier, DiscordRestNotifier)
 
 
-def test_healthz_says_which_scheduler_is_in_charge(settings, monkeypatch):
+def test_health_says_which_scheduler_is_in_charge(settings, monkeypatch):
     """A deployment that scaled to zero with the scheduler still on looks
     healthy and quietly never commits. This is how you tell from outside."""
     from fastapi.testclient import TestClient
 
     settings.scheduler_enabled = False
     with TestClient(_built_with(settings, monkeypatch)) as client:
-        assert client.get("/healthz").json()["scheduler"] == "external"
+        assert client.get("/health").json()["scheduler"] == "external"

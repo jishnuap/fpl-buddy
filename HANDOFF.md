@@ -146,7 +146,7 @@ though the design below uses an external store instead so approval survives rest
 
 ```
 scheduler (APScheduler)                    FastAPI
-  ├─ T-36h  propose ──┐                      ├─ GET  /healthz
+  ├─ T-36h  propose ──┐                      ├─ GET  /health
   └─ T-45m  commit ───┤                      ├─ GET  /proposals/latest
                       │                      ├─ GET  /a/{token}        (signed link)
                       ▼                      ├─ POST /proposals/{id}/approve
