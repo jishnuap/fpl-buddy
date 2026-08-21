@@ -511,7 +511,10 @@ def note(**overrides) -> ArticleNote:
         "source": "example",
         "summary": "The author argues Haaland is the captain.",
         "key_points": ["Haaland is on penalties", "Fixture is at home"],
-        "published": datetime(2026, 7, 25, tzinfo=UTC),
+        # Relative to now, not a fixed date: `recent()` -- which `for_player`
+        # and `search` read through -- drops notes past their 21-day TTL, so a
+        # hardcoded date silently ages out and fails tests about lookup.
+        "published": datetime.now(UTC),
         "tags": ["tips"],
         "players": [411],
         "teams": ["MCI"],
@@ -523,7 +526,7 @@ def note(**overrides) -> ArticleNote:
 
 
 def test_a_note_round_trips_through_markdown(store):
-    store.save(note())
+    store.save(note(published=datetime(2026, 7, 25, tzinfo=UTC)))
     loaded = store.get("example-2026-07-25-thing")
 
     assert loaded is not None
@@ -730,9 +733,14 @@ sources:
 
 
 def _serve_one_article(router, *, body: str | None = None) -> str:
-    url = f"{HOST}/2026/07/25/vasquez-captain"
+    # Dated relative to now, not fixed: a harvest prunes expired notes at the
+    # end of the run, so an article older than the 21-day TTL is stored and
+    # then deleted before the test can read it back.
+    published = datetime.now(UTC) - timedelta(days=1)
+    url = f"{HOST}/{published:%Y/%m/%d}/vasquez-captain"
     router.get(f"{HOST}/feed").respond(
-        200, text=feed_xml([("Captain", url, "Sat, 25 Jul 2026 08:00:00 +0000")])
+        200,
+        text=feed_xml([("Captain", url, published.strftime("%a, %d %b %Y %H:%M:%S +0000"))]),
     )
     router.get(url).respond(
         200,
