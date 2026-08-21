@@ -1,6 +1,6 @@
 [project]
 name = "fpl-buddy"
-version = "0.1.0"
+version = "0.1.1"
 description = "A LangChain deep agent that proposes FPL captaincy + transfers, waits for you, and commits at the deadline."
 readme = "README.md"
 requires-python = ">=3.11"
