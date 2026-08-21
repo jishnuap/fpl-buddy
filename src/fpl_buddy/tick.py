@@ -161,10 +161,11 @@ def _act_on_plan(
     # Starting late is fine and deliberate: a first deploy at T-6h should still
     # produce a proposal rather than skip the gameweek.
     if plan.propose_at <= now < plan.commit_at:
-        if orchestrator.latest(gameweek=plan.gameweek) is None:
+        existing = orchestrator.latest(gameweek=plan.gameweek)
+        if _needs_proposing(existing, plan):
             _propose(orchestrator, plan, ledger, now, report)
         else:
-            logger.debug("GW%s already has a proposal.", plan.gameweek)
+            logger.debug("GW%s already has a proposal for this deadline.", plan.gameweek)
 
     # Committing after the deadline would submit into the next gameweek, so the
     # window closes hard at it.
@@ -188,8 +189,31 @@ def _act_on_plan(
             _commit(orchestrator, ledger, now, report)
 
 
+def _needs_proposing(existing, plan: Plan) -> bool:
+    """Is there a proposal built for *this* deadline, or only an older one?
+
+    Gameweek numbers outlive the plans made against them. A GW1 proposal written
+    during pre-season testing still answers "does GW1 have a proposal?" a month
+    later, so the old existence check let the real propose window pass without
+    running the agent -- and the commit job then acted on a plan written against
+    a squad that had been rebuilt since. The window, not the gameweek number, is
+    what makes a proposal current.
+
+    A stale proposal the human has already touched is left alone: quietly
+    replacing something you approved is worse than a stale plan, and the
+    executor re-validates against fresh data before any POST regardless.
+    """
+    from .decisions.schema import ProposalStatus
+
+    if existing is None:
+        return True
+    if existing.status != ProposalStatus.PENDING:
+        return False
+    return existing.created_at < plan.propose_at
+
+
 def _propose(orchestrator, plan: Plan, ledger: JobLedger, now: datetime, report: TickReport) -> None:
-    logger.info("Propose window is open for GW%s and nothing exists yet.", plan.gameweek)
+    logger.info("Propose window is open for GW%s with no current proposal.", plan.gameweek)
     try:
         proposal = orchestrator.propose()
     except Exception as exc:  # noqa: BLE001 - the next tick tries again

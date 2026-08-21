@@ -8,7 +8,7 @@ player id from costing real points.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
@@ -25,6 +25,14 @@ class ProposalStatus(StrEnum):
     FAILED = "failed"  # execution attempted and rejected by FPL
     EXPIRED = "expired"  # deadline passed with auto-commit disabled
     SUPERSEDED = "superseded"  # a newer proposal replaced this one
+
+
+# Gameweeks are a week apart, so a plan written more than one cycle ahead of its
+# own deadline was not merely early -- it was decided during a different
+# gameweek, against a squad and a set of prices that have had a full transfer
+# window to change. Being written a day or two out is early, not stale; the
+# renderers show the lead time either way and reserve the warning for this.
+STALE_LEAD_TIME = timedelta(days=7)
 
 
 TERMINAL_STATUSES = {
@@ -149,6 +157,25 @@ class Proposal(BaseModel):
     @property
     def is_terminal(self) -> bool:
         return self.status in TERMINAL_STATUSES
+
+    @property
+    def lead_time(self) -> timedelta:
+        """How far ahead of its own deadline this plan was written."""
+        return self.deadline - self.created_at
+
+    @property
+    def is_stale(self) -> bool:
+        """Was this decided too early to have seen the team news?"""
+        return self.lead_time > STALE_LEAD_TIME
+
+    def describe_lead_time(self) -> str:
+        """``"26 days"``, ``"3 hours"``, ``"48 minutes"`` -- for the human summary."""
+        seconds = max(self.lead_time.total_seconds(), 0)
+        for size, unit in ((86400, "day"), (3600, "hour"), (60, "minute")):
+            if seconds >= size:
+                count = int(seconds // size)
+                return f"{count} {unit}{'s' if count != 1 else ''}"
+        return "under a minute"
 
     @property
     def is_executable(self) -> bool:

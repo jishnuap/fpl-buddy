@@ -24,7 +24,7 @@ def _clip(text: str, limit: int = _FIELD_LIMIT) -> str:
 
 
 def _color(proposal: Proposal) -> discord.Color:
-    if proposal.fatal_issues:
+    if proposal.fatal_issues or proposal.is_stale:
         return discord.Color.red()
     if proposal.status == ProposalStatus.FAILED:
         return discord.Color.red()
@@ -36,6 +36,14 @@ def _color(proposal: Proposal) -> discord.Color:
 
 
 def _status_line(proposal: Proposal, settings: Settings) -> str:
+    if proposal.is_stale:
+        # Reads identically to a fresh plan otherwise, which is the whole danger:
+        # the names in it can belong to a squad that has since been rebuilt.
+        return (
+            f"**Written {proposal.describe_lead_time()} before this deadline and never "
+            "re-derived.** It has not seen the current squad or the team news -- check "
+            "every name before acting."
+        )
     if proposal.fatal_issues:
         return "**Cannot be submitted -- failed validation.** Amend it or act in the app."
     if proposal.status in (ProposalStatus.EXECUTED, ProposalStatus.AUTO_EXECUTED):
@@ -54,9 +62,10 @@ def _status_line(proposal: Proposal, settings: Settings) -> str:
 def build_embed(proposal: Proposal, settings: Settings) -> discord.Embed:
     agent = proposal.agent
     deadline = proposal.deadline.astimezone().strftime("%a %d %b %H:%M %Z")
+    prefix = "[STALE] " if proposal.is_stale else ""
 
     embed = discord.Embed(
-        title=_clip(f"GW{proposal.gameweek}: {proposal.headline()}", 256),
+        title=_clip(f"{prefix}GW{proposal.gameweek}: {proposal.headline()}", 256),
         description=_clip(agent.summary, 4096),
         color=_color(proposal),
     )
@@ -104,7 +113,8 @@ def build_embed(proposal: Proposal, settings: Settings) -> discord.Embed:
 
     embed.add_field(name="Status", value=_clip(_status_line(proposal, settings)), inline=False)
 
-    footer = f"Deadline {deadline} · {proposal.id}"
+    written = proposal.created_at.astimezone().strftime("%a %d %b %H:%M %Z")
+    footer = f"Deadline {deadline} · written {written} · {proposal.id}"
     if settings.dry_run:
         footer += " · DRY_RUN on"
     embed.set_footer(text=_clip(footer, 2048))

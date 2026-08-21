@@ -8,6 +8,8 @@ matches what the settings will actually do.
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 from pydantic import SecretStr
 
@@ -441,3 +443,31 @@ def test_a_dead_notifier_never_raises_out_of_the_error_notification(settings):
             raise RuntimeError("discord is on fire")
 
     safe_notify_errors(Broken(), ["propose: boom"], settings)
+
+
+# --------------------------------------------------------------- staleness
+
+
+def test_a_plan_from_a_previous_cycle_is_labelled_stale(context, settings):
+    """The July proposal that surfaced at an August deadline read as fresh advice.
+
+    It named a transfer out of a player the squad no longer contained, and
+    nothing in the message said when it had been written.
+    """
+    written = context.gameweek.deadline_time - timedelta(days=26)
+    proposal = stored(context, created_at=written)
+
+    subject, text, _html = render_proposal(proposal, settings)
+
+    assert subject.startswith("[STALE]")
+    assert "26 days" in text
+    assert "never re-derived" in text
+
+
+def test_a_plan_written_in_the_window_is_not_labelled_stale(context, settings):
+    subject, text, _html = render_proposal(stored(context), settings)
+
+    assert not subject.startswith("[STALE]")
+    assert "never re-derived" not in text
+    # The lead time is still stated: early is worth knowing even when it is fine.
+    assert "before that deadline" in text

@@ -161,6 +161,10 @@ def make_stored(agent: AgentProposal, context: DecisionContext, **overrides) -> 
         "entry_id": 999999,
         "gameweek": agent.gameweek,
         "deadline": context.gameweek.deadline_time,
+        # Written inside the propose window, as every real proposal is. Left at
+        # "now" it would sit days ahead of the fixture's deadline, which no code
+        # path produces and which the renderers rightly flag as stale.
+        "created_at": context.gameweek.deadline_time - timedelta(hours=1),
         "agent": agent,
     }
     payload.update(overrides)
