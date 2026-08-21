@@ -99,6 +99,12 @@ def settings(tmp_path: Path) -> Settings:
     return Settings(
         _env_file=None,
         fpl_entry_id=999999,
+        # respx intercepts httpx and nothing else. The default chain puts
+        # scrapling first, which fetches through curl -- straight past the mock
+        # and into a real DNS lookup of the test host. Backend-selection tests
+        # set this themselves; everything else fetches over the mocked
+        # transport, which is the boundary those tests mean to exercise.
+        knowledge_fetch_backends="httpx",
         state_dir=str(tmp_path / ".state"),
         dry_run=True,
         max_points_hit=0,
