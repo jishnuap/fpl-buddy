@@ -178,10 +178,28 @@ def render_proposal(proposal: Proposal, settings: Settings) -> tuple[str, str, s
     url = review_url(settings, proposal.id)
     deadline = proposal.deadline.astimezone().strftime("%a %d %b %H:%M %Z")
 
+    built = proposal.created_at.astimezone().strftime("%a %d %b %H:%M %Z")
+    stale = proposal.is_stale
+
     subject = f"FPL GW{proposal.gameweek}: {proposal.headline()}"
+    if stale:
+        subject = f"[STALE] {subject}"
 
     lines = [
         f"Gameweek {proposal.gameweek} -- deadline {deadline}",
+        f"Written {built}, {proposal.describe_lead_time()} before that deadline",
+    ]
+    if stale:
+        # The failure this exists for is silent: a proposal for a gameweek that
+        # was drafted weeks earlier reads exactly like one drafted an hour ago,
+        # and the names in it can belong to a squad you no longer own.
+        lines += [
+            "",
+            f"!! Written {proposal.describe_lead_time()} before the deadline and never "
+            "re-derived, so it has not seen the current squad or the team news. "
+            "Check every name in it before acting.",
+        ]
+    lines += [
         "",
         f"Captain:      {agent.captaincy.captain_name or agent.captaincy.captain_id}",
         f"Vice:         {agent.captaincy.vice_captain_name or agent.captaincy.vice_captain_id}",

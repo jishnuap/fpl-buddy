@@ -7,6 +7,7 @@ later, the whole design collapses into "sometimes nothing happens".
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -67,8 +68,9 @@ def test_latest_prefers_the_newest(store, context):
 
 
 def test_latest_can_be_scoped_to_a_gameweek(store, context):
-    store.save(stored(context, "gw4", gameweek=4))
-    store.save(stored(context, "gw5", gameweek=5, created_at=datetime.now(UTC) + timedelta(hours=1)))
+    written = context.gameweek.deadline_time - timedelta(hours=1)
+    store.save(stored(context, "gw4", gameweek=4, created_at=written))
+    store.save(stored(context, "gw5", gameweek=5, created_at=written + timedelta(days=7)))
     assert store.latest(gameweek=4).id == "gw4"
     assert store.latest().id == "gw5"
 
@@ -225,3 +227,34 @@ def test_headline_reads_like_a_notification(context):
 
 def test_headline_says_rolling_when_there_are_no_transfers(context):
     assert "no transfers (rolling)" in make_stored(make_proposal(), context).headline()
+
+
+def test_a_record_with_fields_the_schema_dropped_is_still_readable(store, context):
+    """Schema drift must not delete history.
+
+    ``extra="forbid"`` guards the model against inventing fields while a proposal
+    is being drafted. Applied to what is already on disk it meant a removed field
+    made whole proposals vanish from ``latest()`` and ``pending()`` -- so the
+    commit job could decide a gameweek had no plan while one sat in the store.
+    """
+    store.save(stored(context, "old"))
+    path = store.directory / "old.json"
+    payload = json.loads(path.read_text())
+    payload["agent"]["lineup_reason"] = "a field this schema no longer has"
+    path.write_text(json.dumps(payload))
+
+    loaded = store.get("old")
+    assert loaded is not None
+    assert loaded.id == "old"
+    assert [p.id for p in store.list_all()] == ["old"]
+
+
+def test_a_genuinely_corrupt_record_is_still_refused(store, context):
+    store.save(stored(context, "broken"))
+    path = store.directory / "broken.json"
+    payload = json.loads(path.read_text())
+    del payload["agent"]["captaincy"]
+    path.write_text(json.dumps(payload))
+
+    assert store.get("broken") is None
+    assert store.list_all() == []

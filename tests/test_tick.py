@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from fpl_buddy.decisions.schema import ProposalStatus
 from fpl_buddy.knowledge.harvest import HarvestReport
 from fpl_buddy.ledger import JobLedger, LedgerState
 from fpl_buddy.schedule import plan_for
@@ -62,11 +63,26 @@ class FakeOrchestrator:
         return None
 
 
+# A proposal made during the window under test. Far enough in the future that it
+# is unambiguously "written for this deadline" whatever the fixture's clock says.
+FRESH = datetime.max.replace(tzinfo=UTC)
+
+
 class _Stub:
-    def __init__(self, id_: str, *, terminal: bool = False) -> None:
+    def __init__(
+        self,
+        id_: str,
+        *,
+        terminal: bool = False,
+        status: ProposalStatus | None = None,
+        created_at: datetime = FRESH,
+    ) -> None:
         self.id = id_
         self.is_terminal = terminal
-        self.status = type("S", (), {"value": "executed" if terminal else "pending"})()
+        self.status = status or (
+            ProposalStatus.EXECUTED if terminal else ProposalStatus.PENDING
+        )
+        self.created_at = created_at
 
 
 @pytest.fixture
@@ -142,6 +158,51 @@ def test_it_does_not_propose_twice_for_the_same_gameweek(bootstrap, settings, le
     run_tick(settings, now=now + timedelta(minutes=10), ledger=ledger, orchestrator=orchestrator)
 
     assert orchestrator.proposed == 1
+
+
+def test_a_proposal_from_a_previous_cycle_does_not_block_this_one(
+    bootstrap, settings, ledger
+):
+    """The bug that lost GW1: pre-season test proposals suppressed the real run.
+
+    Gameweek numbers repeat across a summer of testing, so "GW1 already has a
+    proposal" was true a month before the deadline it was written for. The agent
+    never ran, and the commit job acted on a plan drafted against a squad that
+    had since been rebuilt.
+    """
+    now = _in_propose_window(bootstrap, settings)
+    plan = plan_for(bootstrap, settings)
+    assert plan.propose_at is not None
+    month_old = _Stub("gw01-from-july", created_at=plan.propose_at - timedelta(days=26))
+    orchestrator = FakeOrchestrator(bootstrap, existing=month_old)
+
+    report = run_tick(settings, now=now, ledger=ledger, orchestrator=orchestrator)
+
+    assert PROPOSE in report.ran
+    assert orchestrator.proposed == 1
+
+
+def test_a_stale_proposal_the_human_approved_is_left_alone(bootstrap, settings, ledger):
+    """Replacing a plan you said yes to is worse than acting on an old one.
+
+    The executor re-validates against fresh data before any POST, so an approved
+    proposal that has gone stale gets blocked rather than submitted -- which is
+    the honest outcome for a decision a human actually made.
+    """
+    now = _in_propose_window(bootstrap, settings)
+    plan = plan_for(bootstrap, settings)
+    assert plan.propose_at is not None
+    approved = _Stub(
+        "gw01-approved",
+        status=ProposalStatus.APPROVED,
+        created_at=plan.propose_at - timedelta(days=26),
+    )
+    orchestrator = FakeOrchestrator(bootstrap, existing=approved)
+
+    report = run_tick(settings, now=now, ledger=ledger, orchestrator=orchestrator)
+
+    assert PROPOSE not in report.ran
+    assert orchestrator.proposed == 0
 
 
 def test_before_the_window_opens_it_waits(bootstrap, settings, ledger):

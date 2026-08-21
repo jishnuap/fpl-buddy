@@ -11,16 +11,71 @@ deadline. Two backends:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Any
+
+from pydantic import ValidationError
 
 from ..config import Settings
 from .schema import Proposal, ProposalStatus
 
 logger = logging.getLogger(__name__)
+
+
+def load_proposal(raw: str, source: str) -> Proposal | None:
+    """Parse a stored proposal, tolerating fields the schema has since dropped.
+
+    ``extra="forbid"`` exists to stop the *model* inventing fields while a
+    proposal is being drafted. Enforcing it against records already on disk turns
+    every schema change into silent data loss: the record fails to parse, the
+    store logs and skips it, and it disappears from ``latest()``, ``pending()``
+    and ``supersede_open_proposals()`` alike -- so the commit job can conclude a
+    gameweek has no plan when one is sitting right there. Unknown keys in stored
+    JSON are history, not hallucination. Drop them, say which, keep the record.
+
+    Anything that fails for a real reason still returns ``None`` and is logged as
+    the corruption it is.
+    """
+    try:
+        return Proposal.model_validate_json(raw)
+    except ValidationError as exc:
+        errors = exc.errors()
+        extras = [e["loc"] for e in errors if e["type"] == "extra_forbidden"]
+        if not extras or len(extras) != len(errors):
+            logger.error("Corrupt proposal %s: %s", source, exc)
+            return None
+
+    data = json.loads(raw)
+    for location in extras:
+        _drop(data, location)
+    try:
+        proposal = Proposal.model_validate(data)
+    except ValidationError as exc:
+        logger.error("Corrupt proposal %s: %s", source, exc)
+        return None
+
+    logger.warning(
+        "Proposal %s carries fields this schema no longer has (%s); ignoring them.",
+        source,
+        ", ".join(".".join(str(part) for part in loc) for loc in extras),
+    )
+    return proposal
+
+
+def _drop(data: Any, location: tuple[Any, ...]) -> None:
+    """Delete one pydantic error location from a decoded payload."""
+    for part in location[:-1]:
+        try:
+            data = data[part]
+        except (KeyError, IndexError, TypeError):
+            return
+    with contextlib.suppress(KeyError, IndexError, TypeError):
+        del data[location[-1]]
 
 
 class ProposalStore(ABC):
@@ -77,7 +132,7 @@ class FileProposalStore(ProposalStore):
         if not path.exists():
             return None
         try:
-            return Proposal.model_validate_json(path.read_text())
+            return load_proposal(path.read_text(), str(path))
         except Exception as exc:  # noqa: BLE001
             logger.error("Corrupt proposal file %s: %s", path, exc)
             return None
@@ -86,9 +141,12 @@ class FileProposalStore(ProposalStore):
         out: list[Proposal] = []
         for path in self.directory.glob("*.json"):
             try:
-                out.append(Proposal.model_validate_json(path.read_text()))
+                proposal = load_proposal(path.read_text(), str(path))
             except Exception as exc:  # noqa: BLE001
                 logger.error("Skipping unreadable proposal %s: %s", path, exc)
+                continue
+            if proposal is not None:
+                out.append(proposal)
         return out
 
 
@@ -123,15 +181,18 @@ class AzureTableProposalStore(ProposalStore):
             entity = self.table.get_entity(self.PARTITION, proposal_id)
         except ResourceNotFoundError:
             return None
-        return Proposal.model_validate_json(entity["payload"])
+        return load_proposal(entity["payload"], proposal_id)
 
     def list_all(self) -> list[Proposal]:
         out: list[Proposal] = []
         for entity in self.table.query_entities(f"PartitionKey eq '{self.PARTITION}'"):
             try:
-                out.append(Proposal.model_validate_json(entity["payload"]))
+                proposal = load_proposal(entity["payload"], str(entity.get("RowKey")))
             except (json.JSONDecodeError, KeyError, ValueError) as exc:
                 logger.error("Skipping unreadable row %s: %s", entity.get("RowKey"), exc)
+                continue
+            if proposal is not None:
+                out.append(proposal)
         return out
 
 

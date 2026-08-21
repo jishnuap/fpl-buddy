@@ -12,6 +12,7 @@ import asyncio
 import re
 import threading
 from collections.abc import Iterator
+from datetime import timedelta
 
 import discord
 import pytest
@@ -398,3 +399,15 @@ def test_without_a_harvest_channel_everything_shares_the_main_one(background_loo
     DiscordNotifier(bot, settings).send("subject", "body", meta={"kind": "harvest"})
 
     assert bot.asked_for == [123]
+
+
+def test_a_stale_embed_is_red_and_says_so(context, settings):
+    """Same failure as the notification: it has to be unmissable at a glance."""
+    written = context.gameweek.deadline_time - timedelta(days=26)
+    embed = formatting.build_embed(stored(context, created_at=written), settings)
+
+    assert embed.color == discord.Color.red()
+    assert embed.title.startswith("[STALE]")
+    status = next(f for f in embed.fields if f.name == "Status")
+    assert "26 days" in status.value
+    assert "never re-derived" in status.value
