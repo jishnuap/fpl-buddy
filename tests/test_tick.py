@@ -182,6 +182,49 @@ def test_a_proposal_from_a_previous_cycle_does_not_block_this_one(
     assert orchestrator.proposed == 1
 
 
+def test_a_rejection_from_a_previous_cycle_does_not_block_this_one(
+    bootstrap, settings, ledger
+):
+    """The bug that lost GW2.
+
+    Rejecting discards a plan; it does not decline the gameweek. The rejected
+    proposal used to satisfy the propose guard, and because REJECTED is terminal
+    the commit window skipped the gameweek too -- so it got nothing at all.
+    """
+    now = _in_propose_window(bootstrap, settings)
+    plan = plan_for(bootstrap, settings)
+    assert plan.propose_at is not None
+    rejected = _Stub(
+        "gw02-rejected-last-week",
+        status=ProposalStatus.REJECTED,
+        created_at=plan.propose_at - timedelta(days=7),
+    )
+    orchestrator = FakeOrchestrator(bootstrap, existing=rejected)
+
+    report = run_tick(settings, now=now, ledger=ledger, orchestrator=orchestrator)
+
+    assert PROPOSE in report.ran
+    assert orchestrator.proposed == 1
+
+
+def test_a_rejection_inside_the_window_is_a_considered_no(bootstrap, settings, ledger):
+    """Re-proposing over a fresh rejection would be arguing with the human."""
+    now = _in_propose_window(bootstrap, settings)
+    plan = plan_for(bootstrap, settings)
+    assert plan.propose_at is not None
+    rejected = _Stub(
+        "gw02-just-rejected",
+        status=ProposalStatus.REJECTED,
+        created_at=plan.propose_at + timedelta(minutes=1),
+    )
+    orchestrator = FakeOrchestrator(bootstrap, existing=rejected)
+
+    report = run_tick(settings, now=now, ledger=ledger, orchestrator=orchestrator)
+
+    assert PROPOSE not in report.ran
+    assert orchestrator.proposed == 0
+
+
 def test_a_stale_proposal_the_human_approved_is_left_alone(bootstrap, settings, ledger):
     """Replacing a plan you said yes to is worse than acting on an old one.
 

@@ -7,13 +7,17 @@ tests walk every command's help and exercise the paths that need no network.
 
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
+from fpl_buddy import orchestrator as orchestrator_module
 from fpl_buddy.cli import app
 from fpl_buddy.config import get_settings
+from fpl_buddy.data import context as context_module
 
 runner = CliRunner()
 
@@ -140,18 +144,16 @@ def test_show_can_print_the_brief_and_transcript(context):
 
 def test_dry_run_banner_is_shown_before_anything_risky(monkeypatch):
     """`propose` must announce the mode before it does any work."""
-    from fpl_buddy import cli
 
     def explode(self):
         raise RuntimeError("stop here")
 
-    monkeypatch.setattr(cli.Orchestrator, "propose", explode, raising=True)
+    monkeypatch.setattr(orchestrator_module.Orchestrator, "propose", explode, raising=True)
     result = runner.invoke(app, ["propose"])
     assert "DRY RUN" in result.output
 
 
 def test_live_mode_is_announced_loudly(monkeypatch):
-    from fpl_buddy import cli
 
     monkeypatch.setenv("DRY_RUN", "false")
     get_settings.cache_clear()
@@ -159,7 +161,7 @@ def test_live_mode_is_announced_loudly(monkeypatch):
     def explode(self):
         raise RuntimeError("stop here")
 
-    monkeypatch.setattr(cli.Orchestrator, "propose", explode, raising=True)
+    monkeypatch.setattr(orchestrator_module.Orchestrator, "propose", explode, raising=True)
     result = runner.invoke(app, ["propose"])
     assert "LIVE" in result.output
 
@@ -195,10 +197,34 @@ def test_the_brief_is_printed_verbatim_not_as_rich_markup(monkeypatch, tmp_path)
         def render(self) -> str:
             return f"# brief\n{marker}\n"
 
-    monkeypatch.setattr(cli, "build_context", lambda *a, **k: _FakeContext())
+    monkeypatch.setattr(context_module, "build_context", lambda *a, **k: _FakeContext())
     monkeypatch.setattr(cli, "FPLClient", lambda *a, **k: object())
 
     result = runner.invoke(app, ["context"])
     assert result.exit_code == 0
     assert "some-article-id" in result.output
     assert "GKP, id=110" in result.output
+
+
+def test_the_cli_does_not_import_the_agent_stack():
+    """`tick` runs every few minutes and mostly decides nothing is due.
+
+    Importing the CLI used to pull `.orchestrator` at module scope, and with it
+    LangChain, deepagents and langchain-openai -- about a second on a laptop and
+    the best part of twenty on a cold 1-vCPU container, paid on every scheduled
+    run whether or not anything happened. tick.py keeps its own imports
+    function-local for exactly that reason; this pins the same discipline one
+    level up, where it was being undone.
+
+    A fresh interpreter, because the rest of the suite has long since imported
+    everything.
+    """
+    code = (
+        "import sys, fpl_buddy.cli; "
+        "print(any(m.split('.')[0] in {'langchain', 'langchain_core', 'langchain_openai', "
+        "'deepagents'} for m in sys.modules))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+    )
+    assert result.stdout.strip() == "False"
