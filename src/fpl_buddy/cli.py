@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
 
 import typer
 from rich.console import Console
@@ -20,14 +20,23 @@ from rich.text import Text
 
 from .approval import review_url
 from .config import Settings, get_settings
-from .data.context import build_context
 from .decisions.executor import ExecutionBlocked
 from .decisions.schema import Proposal, ProposalStatus
 from .decisions.store import build_store
 from .decisions.validate import validate
 from .fpl.auth import FPLAuthenticator, FPLAuthError
 from .fpl.client import FPLClient
-from .orchestrator import NotActionable, Orchestrator, ProposalNotFound
+
+if TYPE_CHECKING:
+    from .orchestrator import Orchestrator
+
+# `.orchestrator` and `.data.context` are imported inside the commands that need
+# them, not here. Importing `.orchestrator` pulls in LangChain, deepagents and
+# langchain-openai -- about a second of import on a laptop and the best part of
+# twenty on a cold 1-vCPU container. `tick` runs every few minutes and mostly
+# decides there is nothing to do, and it was paying that cost on every run:
+# tick.py keeps its own imports function-local for exactly this reason, and the
+# saving was being undone one level up, here.
 
 app = typer.Typer(
     add_completion=False,
@@ -186,6 +195,8 @@ def verify(verbose: bool = False) -> None:
 @app.command()
 def context(verbose: bool = False) -> None:
     """Print the exact brief the agent will reason over."""
+    from .data.context import build_context
+
     settings = _setup(verbose)
     # markup=False: the brief is a prompt, not Rich markup. It is full of square
     # brackets ("[GKP, id=110]", "[article-id]") that Rich would otherwise try to
@@ -262,6 +273,8 @@ def show(
 @app.command()
 def propose(verbose: bool = False) -> None:
     """Run the agent now and store the resulting proposal."""
+    from .orchestrator import Orchestrator
+
     settings = _setup(verbose)
     _banner(settings)
     orchestrator = Orchestrator(settings)
@@ -281,6 +294,8 @@ def check(
     verbose: bool = False,
 ) -> None:
     """Re-validate a stored proposal against live data, without submitting."""
+    from .data.context import build_context
+
     settings = _setup(verbose)
     store = build_store(settings)
     proposal = store.get(proposal_id) if proposal_id else store.latest()
@@ -308,6 +323,8 @@ def approve(
     verbose: bool = False,
 ) -> None:
     """Approve a proposal. Submits immediately unless EXECUTE_ON_APPROVAL is off."""
+    from .orchestrator import NotActionable, Orchestrator, ProposalNotFound
+
     settings = _setup(verbose)
     orchestrator = Orchestrator(settings)
     proposal = _resolve(orchestrator, proposal_id)
@@ -334,6 +351,8 @@ def reject(
     verbose: bool = False,
 ) -> None:
     """Reject a proposal so the deadline job leaves it alone."""
+    from .orchestrator import NotActionable, Orchestrator, ProposalNotFound
+
     settings = _setup(verbose)
     orchestrator = Orchestrator(settings)
     proposal = _resolve(orchestrator, proposal_id)
@@ -351,6 +370,8 @@ def amend(
     verbose: bool = False,
 ) -> None:
     """Send feedback and get a fresh proposal."""
+    from .orchestrator import NotActionable, Orchestrator, ProposalNotFound
+
     settings = _setup(verbose)
     orchestrator = Orchestrator(settings)
     proposal = _resolve(orchestrator, proposal_id)
@@ -365,6 +386,8 @@ def amend(
 @app.command()
 def commit(verbose: bool = False) -> None:
     """Run the deadline job now: rebuild the context, re-validate, submit."""
+    from .orchestrator import Orchestrator
+
     settings = _setup(verbose)
     _banner(settings)
     orchestrator = Orchestrator(settings)

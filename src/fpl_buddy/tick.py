@@ -199,15 +199,23 @@ def _needs_proposing(existing, plan: Plan) -> bool:
     a squad that had been rebuilt since. The window, not the gameweek number, is
     what makes a proposal current.
 
-    A stale proposal the human has already touched is left alone: quietly
+    A stale proposal the human has already *decided on* is left alone: quietly
     replacing something you approved is worse than a stale plan, and the
     executor re-validates against fresh data before any POST regardless.
+
+    Rejection is the exception, and GW2 was lost to treating it as one of those
+    decisions. Rejecting discards a plan; it does not decline the gameweek. A
+    rejected proposal from an earlier cycle used to satisfy this guard, so the
+    propose window skipped the agent -- and because REJECTED is terminal, the
+    commit window skipped it too, leaving the gameweek with nothing at all. A
+    rejection made *inside* this window still stands: that is a considered no on
+    the current plan, and re-proposing over it would be arguing with the human.
     """
     from .decisions.schema import ProposalStatus
 
     if existing is None:
         return True
-    if existing.status != ProposalStatus.PENDING:
+    if existing.status not in (ProposalStatus.PENDING, ProposalStatus.REJECTED):
         return False
     return existing.created_at < plan.propose_at
 
