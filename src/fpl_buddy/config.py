@@ -51,16 +51,28 @@ class Settings(BaseSettings):
         default=SecretStr(""),
         description="AI Studio key, from aistudio.google.com/apikey.",
     )
+    # Google retires dated model names on its own schedule -- gemini-2.5-flash
+    # started 404ing for new keys with "no longer available to new users"
+    # without any change on this end, which is what took the harvest down.
+    # gemini-3.8-flash is pinned here rather than an auto-updating "-latest"
+    # alias because that same rollover is also how a working setup can start
+    # failing unannounced; a dated name at least fails the same way on
+    # purpose. Re-verify against a live key before bumping it.
+    #
+    # A "pro"-tier model was tried for the agent role first and lost the
+    # thread of a live run: 60 tool calls exploring transfer candidates
+    # without ever reaching the final AgentProposal. gemini-3.8-flash
+    # converged the same brief in 36. Summarising is schema extraction over a
+    # page of prose, not reasoning, and the harvest fires a dozen of them back
+    # to back, so the same model's cost and requests-per-minute ceiling suit
+    # that role too -- both are pinned to it rather than splitting tiers on
+    # unverified guesses about what a "better" model would do here.
     google_model: str = Field(
-        default="gemini-2.5-pro",
+        default="gemini-3.8-flash",
         description="The model the agent reasons with.",
     )
-    # Summarising is schema extraction over a page of prose, not reasoning, and
-    # the harvest fires a dozen of them back to back. Flash both costs less and
-    # has the higher requests-per-minute ceiling, which is the constraint that
-    # actually bites on a burst.
     google_summary_model: str = Field(
-        default="gemini-2.5-flash",
+        default="gemini-3.8-flash",
         description="The model the harvest summarises articles with.",
     )
 
