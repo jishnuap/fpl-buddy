@@ -222,7 +222,7 @@ def test_the_cli_does_not_import_the_agent_stack():
     code = (
         "import sys, fpl_buddy.cli; "
         "print(any(m.split('.')[0] in {'langchain', 'langchain_core', 'langchain_openai', "
-        "'deepagents'} for m in sys.modules))"
+        "'langchain_google_genai', 'deepagents'} for m in sys.modules))"
     )
     result = subprocess.run(
         [sys.executable, "-c", code], capture_output=True, text=True, check=True
