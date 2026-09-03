@@ -95,7 +95,7 @@ def summarize(
         from ..agent.build import build_model
 
         try:
-            model = build_model(settings)
+            model = build_model(settings, role="summary")
         except Exception as exc:  # noqa: BLE001 - harvesting must never break the app
             logger.error("Could not build a model to summarise with: %s", exc)
             return None

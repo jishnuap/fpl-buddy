@@ -736,3 +736,62 @@ def test_managed_identity_path_uses_a_token_provider(settings, monkeypatch):
     model = build_model(settings)
     assert called["scope"] == "scope/.default"
     assert model.azure_ad_token_provider is not None
+
+
+# ----------------------------------------------------- picking a provider
+
+
+def test_the_provider_setting_decides_which_client_is_built(settings):
+    """Azure and Google are both maintained paths, chosen by one variable.
+
+    A disabled Azure resource is not a hypothetical -- it is what prompted this
+    -- and neither is a rate-limited Google key, so switching has to be a
+    setting rather than a different build.
+    """
+    from pydantic import SecretStr
+
+    settings.llm_provider = "google"
+    settings.google_api_key = SecretStr("ai-studio-test")
+
+    model = build_model(settings)
+    assert type(model).__name__ == "ChatGoogleGenerativeAI"
+
+    settings.llm_provider = "azure"
+    settings.azure_openai_endpoint = "https://example.openai.azure.com"
+    settings.azure_openai_api_key = SecretStr("sk-test")
+    assert type(build_model(settings)).__name__ == "AzureChatOpenAI"
+
+
+def test_google_needs_a_key(settings):
+    settings.llm_provider = "google"
+    with pytest.raises(AgentConfigError, match="GOOGLE_API_KEY"):
+        build_model(settings)
+
+
+def test_the_harvest_summarises_with_the_cheaper_google_model(settings):
+    """A dozen schema extractions in a burst; the RPM ceiling is the constraint.
+
+    Both roles resolve to one deployment on Azure, where a second deployment
+    would have to be provisioned to say anything different.
+    """
+    from pydantic import SecretStr
+
+    settings.llm_provider = "google"
+    settings.google_api_key = SecretStr("ai-studio-test")
+    settings.google_model = "gemini-2.5-pro"
+    settings.google_summary_model = "gemini-2.5-flash"
+
+    assert "gemini-2.5-pro" in build_model(settings, role="agent").model
+    assert "gemini-2.5-flash" in build_model(settings, role="summary").model
+
+
+def test_azure_ignores_the_role_because_a_deployment_is_one_model(settings):
+    from pydantic import SecretStr
+
+    settings.llm_provider = "azure"
+    settings.azure_openai_endpoint = "https://example.openai.azure.com"
+    settings.azure_openai_api_key = SecretStr("sk-test")
+    settings.azure_openai_deployment = "gpt-4.1"
+
+    for role in ("agent", "summary"):
+        assert build_model(settings, role=role).deployment_name == "gpt-4.1"

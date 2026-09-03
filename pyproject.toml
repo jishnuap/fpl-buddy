@@ -1,6 +1,6 @@
 [project]
 name = "fpl-buddy"
-version = "0.1.2"
+version = "0.2.0"
 description = "A LangChain deep agent that proposes FPL captaincy + transfers, waits for you, and commits at the deadline."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -8,6 +8,7 @@ dependencies = [
     "deepagents>=0.2.0",
     "langchain>=1.0.0",
     "langchain-openai>=1.0.0",
+    "langchain-google-genai>=4.3",
     "langgraph>=1.0.0",
     "httpx>=0.27",
     # Chrome TLS impersonation for the FPL password login. Premier League's bot

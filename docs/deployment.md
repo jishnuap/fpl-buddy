@@ -94,7 +94,9 @@ short version of what actually matters:
 | `FPL_ENTRY_ID` | Required. From the URL of your points page. |
 | `FPL_EMAIL`, `FPL_PASSWORD` | The auth path that needs no human upkeep — see below. |
 | `FPL_COOKIE_HEADER` | Fallback for networks where the login is blocked. |
-| `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_API_KEY` | Or `AZURE_OPENAI_AUTH=managed_identity` where the platform can provide one. |
+| `LLM_PROVIDER` | `azure` or `google`. Decides which of the two rows below applies. |
+| `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_API_KEY` | `LLM_PROVIDER=azure`. Or `AZURE_OPENAI_AUTH=managed_identity` where the platform can provide one. |
+| `GOOGLE_API_KEY`, `GOOGLE_MODEL`, `GOOGLE_SUMMARY_MODEL` | `LLM_PROVIDER=google`. One AI Studio key; the agent and the harvest use different models. |
 | `APPROVAL_SECRET` | Signs approval links. `python -c "import secrets;print(secrets.token_urlsafe(32))"`. Rotating it kills every outstanding link. |
 | `PUBLIC_BASE_URL` | Externally reachable base URL, no trailing slash. |
 | `API_KEY` | Set it once the service is on a public URL: read endpoints then require `X-API-Key`. |

@@ -35,6 +35,35 @@ class Settings(BaseSettings):
     # If empty, falls back to key auth. Set to "managed_identity" on Container Apps.
     azure_openai_auth: Literal["api_key", "managed_identity"] = "api_key"
 
+    # ------------------------------------------------------------------ google
+    # Which provider serves the agent and the article summariser. Both paths are
+    # maintained: an Azure resource can be disabled or a Google key rate-limited,
+    # and swapping providers should be one environment variable, not a redeploy
+    # of different code.
+    llm_provider: Literal["azure", "google"] = Field(
+        default="azure",
+        description=(
+            "azure -> Azure OpenAI / AI Foundry. google -> Google AI Studio "
+            "(the Gemini API). Set GOOGLE_API_KEY for the latter."
+        ),
+    )
+    google_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        description="AI Studio key, from aistudio.google.com/apikey.",
+    )
+    google_model: str = Field(
+        default="gemini-2.5-pro",
+        description="The model the agent reasons with.",
+    )
+    # Summarising is schema extraction over a page of prose, not reasoning, and
+    # the harvest fires a dozen of them back to back. Flash both costs less and
+    # has the higher requests-per-minute ceiling, which is the constraint that
+    # actually bites on a burst.
+    google_summary_model: str = Field(
+        default="gemini-2.5-flash",
+        description="The model the harvest summarises articles with.",
+    )
+
     # ------------------------------------------------------------------- state
     # "file" keeps proposals on the container filesystem (use a mounted volume),
     # "azure_table" uses Azure Table Storage (survives revisions/restarts).

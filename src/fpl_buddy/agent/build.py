@@ -14,11 +14,11 @@ Two things here are easy to get wrong and worth stating plainly:
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from langchain.agents.structured_output import ToolStrategy
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage
-from langchain_openai import AzureChatOpenAI
 
 from ..config import Settings
 from ..data.context import DecisionContext
@@ -41,7 +41,54 @@ class AgentConfigError(RuntimeError):
     """The model could not be configured -- missing endpoint, key, or identity."""
 
 
-def build_model(settings: Settings) -> AzureChatOpenAI:
+def build_model(
+    settings: Settings, *, role: Literal["agent", "summary"] = "agent"
+) -> BaseChatModel:
+    """The chat model for one job, from whichever provider is configured.
+
+    ``role`` exists because the two callers want different things. The agent
+    reasons over the whole brief and picks a squad; the summariser extracts a
+    fixed schema out of one article, a dozen times in a row. On Google those are
+    different models -- see ``google_summary_model``. On Azure they are the same
+    deployment, because a deployment is provisioned per model and asking someone
+    to stand up a second one to save a few cents is a poor trade.
+    """
+    if settings.llm_provider == "google":
+        return _build_google(settings, role=role)
+    return _build_azure(settings)
+
+
+def _build_google(settings: Settings, *, role: Literal["agent", "summary"]) -> BaseChatModel:
+    try:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+    except ImportError as exc:  # pragma: no cover - dependency is not optional
+        raise AgentConfigError(
+            "LLM_PROVIDER=google needs langchain-google-genai installed."
+        ) from exc
+
+    key = settings.google_api_key.get_secret_value()
+    if not key:
+        raise AgentConfigError(
+            "GOOGLE_API_KEY is empty. Get one from aistudio.google.com/apikey, "
+            "or set LLM_PROVIDER=azure."
+        )
+
+    model = settings.google_summary_model if role == "summary" else settings.google_model
+    logger.info("Google AI Studio: %s (%s).", model, role)
+    return ChatGoogleGenerativeAI(
+        model=model,
+        google_api_key=key,
+        timeout=settings.http_timeout_seconds * 4,
+        # AI Studio enforces requests per minute, and the harvest summarises a
+        # dozen articles in a burst. A 429 here is routine and worth waiting out
+        # rather than reporting as a failed article.
+        max_retries=5,
+    )
+
+
+def _build_azure(settings: Settings) -> BaseChatModel:
+    from langchain_openai import AzureChatOpenAI
+
     if not settings.azure_openai_endpoint:
         raise AgentConfigError("AZURE_OPENAI_ENDPOINT is not set.")
 
