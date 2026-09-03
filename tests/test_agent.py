@@ -778,11 +778,11 @@ def test_the_harvest_summarises_with_the_cheaper_google_model(settings):
 
     settings.llm_provider = "google"
     settings.google_api_key = SecretStr("ai-studio-test")
-    settings.google_model = "gemini-2.5-pro"
-    settings.google_summary_model = "gemini-2.5-flash"
+    settings.google_model = "gemini-3.8-flash"
+    settings.google_summary_model = "gemini-3.8-flash-lite"
 
-    assert "gemini-2.5-pro" in build_model(settings, role="agent").model
-    assert "gemini-2.5-flash" in build_model(settings, role="summary").model
+    assert "gemini-3.8-flash" in build_model(settings, role="agent").model
+    assert "gemini-3.8-flash-lite" in build_model(settings, role="summary").model
 
 
 def test_azure_ignores_the_role_because_a_deployment_is_one_model(settings):
