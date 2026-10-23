@@ -118,6 +118,40 @@ def test_review_page_renders_the_proposal(client, settings, proposal):
     assert "Approve" in body and "Reject" in body and "Amend" in body
 
 
+def test_the_form_never_hardcodes_a_scheme(client, settings, proposal):
+    """The approve/reject buttons were dead in production for two gameweeks.
+
+    The form's action was built from `request.url`. Cloud Run terminates TLS at
+    its proxy and forwards to the container as plain HTTP, so that came back as
+    "http://" while the page itself was served over https -- mixed content,
+    which browsers block without saying anything. The page returned 200, the
+    buttons did nothing, and no POST ever arrived. It worked locally because
+    http://localhost really is the scheme, so only the deployed service was
+    broken.
+
+    Omitting the action entirely makes the browser post to the document's own
+    URL, scheme included, so there is no server-side reconstruction left to get
+    wrong. What this pins is the absence of an absolute action.
+    """
+    body = client.get(f"/a/{token_for(settings, proposal.id)}").text
+
+    form = body[body.index("<form") : body.index("</form>")]
+    assert "<form method=\"post\">" in form
+    assert "action=" not in form
+    assert "http://" not in form
+
+
+def test_a_proxied_https_request_still_gets_a_relative_form(client, settings, proposal):
+    """The headers Cloud Run actually sends must not reintroduce a scheme."""
+    body = client.get(
+        f"/a/{token_for(settings, proposal.id)}",
+        headers={"x-forwarded-proto": "https", "x-forwarded-for": "203.0.113.1"},
+    ).text
+
+    form = body[body.index("<form") : body.index("</form>")]
+    assert "action=" not in form
+
+
 def test_following_the_link_changes_nothing(client, settings, proposal, orch, fake_client):
     """Mail clients and scanners prefetch links; a GET must never act."""
     client.get(f"/a/{token_for(settings, proposal.id)}")

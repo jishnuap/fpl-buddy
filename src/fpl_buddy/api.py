@@ -126,7 +126,7 @@ def create_app(
 
     # --------------------------------------------------------- approval flow
     @app.get("/a/{token}", response_class=HTMLResponse)
-    def review(token: str, orch: Orch, conf: Conf, request: Request) -> HTMLResponse:
+    def review(token: str, orch: Orch, conf: Conf) -> HTMLResponse:
         """Render the proposal. Deliberately side-effect free."""
         proposal_id = resolve_token(conf, token)
         proposal = orch.get(proposal_id)
@@ -137,7 +137,6 @@ def create_app(
             REVIEW_PAGE.render(
                 p=proposal,
                 body=text,
-                action_url=str(request.url),
                 actionable=not proposal.is_terminal and not proposal.fatal_issues,
                 settings=conf,
             )
@@ -283,7 +282,15 @@ REVIEW_PAGE = Template(
   <pre>{{ body }}</pre>
 
   {% if actionable %}
-  <form method="post" action="{{ action_url }}">
+  {# No action attribute: the form posts to this document's own URL, which the
+     browser builds from the address bar. Behind a TLS-terminating proxy --
+     Cloud Run forwards to the container as plain HTTP -- `request.url` reports
+     "http://", and an https page posting to an http action is mixed content.
+     Browsers block that silently: the page rendered 200, the buttons did
+     nothing, and no POST ever reached the server. Approval was dead in
+     production from the first deploy and worked locally, where
+     http://localhost really is the scheme. #}
+  <form method="post">
     <textarea name="note" rows="3"
       placeholder="Optional note. Required to amend, e.g. 'captain Oakley instead'"></textarea>
     <div class="row">
